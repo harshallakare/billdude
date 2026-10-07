@@ -9,11 +9,20 @@
  *   /ssh-keys                  SSH key manager
  *   /billing                   wallet, top-ups, transactions
  *   /billing/statements/:month monthly usage statement
+ *   /support, /support/:id     support tickets
+ *   /admin/*                   admin area (overview, customers, pricing, tickets, audit)
  */
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { useCurrentUser } from "./lib/auth";
+import { AdminLayout } from "./pages/admin/AdminLayout";
+import { AdminAuditPage } from "./pages/admin/Audit";
+import { AdminCustomerDetailPage } from "./pages/admin/CustomerDetail";
+import { AdminCustomersPage } from "./pages/admin/Customers";
+import { AdminOverviewPage } from "./pages/admin/Overview";
+import { AdminPricingPage } from "./pages/admin/Pricing";
+import { AdminTicketsPage } from "./pages/admin/Tickets";
 import { BillingPage } from "./pages/Billing";
 import { CreateServerPage } from "./pages/CreateServer";
 import { LoginPage } from "./pages/Login";
@@ -22,6 +31,8 @@ import { ServerDetailPage } from "./pages/ServerDetail";
 import { ServersPage } from "./pages/Servers";
 import { SshKeysPage } from "./pages/SshKeys";
 import { StatementPage } from "./pages/Statement";
+import { SupportPage } from "./pages/Support";
+import { TicketThreadPage } from "./pages/TicketThread";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useCurrentUser();
@@ -49,6 +60,16 @@ export function App() {
         <Route path="/ssh-keys" element={<SshKeysPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/billing/statements/:month" element={<StatementPage />} />
+        <Route path="/support" element={<SupportPage />} />
+        <Route path="/support/:id" element={<TicketThreadPage />} />
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<AdminOverviewPage />} />
+          <Route path="customers" element={<AdminCustomersPage />} />
+          <Route path="customers/:id" element={<AdminCustomerDetailPage />} />
+          <Route path="pricing" element={<AdminPricingPage />} />
+          <Route path="tickets" element={<AdminTicketsPage />} />
+          <Route path="audit" element={<AdminAuditPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<Navigate to="/servers" replace />} />
     </Routes>

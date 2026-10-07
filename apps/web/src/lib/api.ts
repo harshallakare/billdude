@@ -132,6 +132,73 @@ export interface Statement {
   payments: { type: string; amount: string; description: string; createdAt: string }[];
 }
 
+export type TicketStatus = "open" | "answered" | "closed";
+
+export interface Ticket {
+  id: string;
+  userId: string;
+  subject: string;
+  status: TicketStatus;
+  serverId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TicketMessage {
+  id: string;
+  body: string;
+  fromStaff: boolean;
+  authorName: string;
+  createdAt: string;
+}
+
+export interface AdminOverview {
+  currency: string;
+  customers: number;
+  suspended: number;
+  overdue: number;
+  walletTotal: string;
+  servers: { total: number; active: number; error: number };
+  thisMonth: { topups: string; usage: string };
+  openTickets: number;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "customer";
+  status: "active" | "suspended";
+  vhiProjectId: string | null;
+  quotas: Quotas | null;
+  effectiveQuotas: Quotas;
+  balance: string;
+  overdueSince: string | null;
+  createdAt: string;
+}
+
+export interface AdminUserDetail {
+  user: AdminUser;
+  servers: { id: string; name: string; status: ServerStatus; ipv4: string | null; flavorId: string; createdAt: string }[];
+  transactions: WalletTransaction[];
+}
+
+export interface AdminPricing {
+  currency: string;
+  defaults: { vcpuHourly: string; ramGbHourly: string; storageGbMonthly: string };
+  flavors: { flavorId: string; name: string; vcpus: number; ramMb: number; hourly: string; hourlyExact: string; monthly: string; override: boolean }[];
+}
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  data: Record<string, unknown> | null;
+  actorEmail: string;
+  createdAt: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -183,6 +250,33 @@ export const api = {
     request<{ status: string; balance: string; currency: string }>("POST", "/billing/topups/verify", { orderId, paymentId, signature }),
   statements: () => request<{ currency: string; statements: { month: string; usage: string }[] }>("GET", "/billing/statements"),
   statement: (month: string) => request<Statement>("GET", `/billing/statements/${month}`),
+
+  tickets: () => request<{ tickets: Ticket[] }>("GET", "/tickets"),
+  createTicket: (subject: string, body: string) => request<{ ticket: Ticket }>("POST", "/tickets", { subject, body }),
+  ticket: (id: string) => request<{ ticket: Ticket; messages: TicketMessage[] }>("GET", `/tickets/${id}`),
+  replyTicket: (id: string, body: string) => request<{ status: TicketStatus }>("POST", `/tickets/${id}/messages`, { body }),
+  closeTicket: (id: string) => request<{ status: TicketStatus }>("POST", `/tickets/${id}/close`, {}),
+
+  admin: {
+    overview: () => request<AdminOverview>("GET", "/admin/overview"),
+    users: () => request<{ users: AdminUser[] }>("GET", "/admin/users"),
+    user: (id: string) => request<AdminUserDetail>("GET", `/admin/users/${id}`),
+    setStatus: (id: string, status: "active" | "suspended") => request<{ ok: true }>("PATCH", `/admin/users/${id}`, { status }),
+    setQuotas: (id: string, quotas: Quotas | null) => request<{ quotas: Quotas }>("PUT", `/admin/users/${id}/quotas`, quotas),
+    adjustWallet: (id: string, amount: string, description: string) =>
+      request<{ balance: string }>("POST", `/admin/users/${id}/wallet`, { amount, description }),
+    pricing: () => request<AdminPricing>("GET", "/admin/pricing"),
+    setFlavorPrice: (flavorId: string, hourly: string) =>
+      request<{ ok: true }>("PUT", `/admin/pricing/flavors/${encodeURIComponent(flavorId)}`, { hourly }),
+    resetFlavorPrice: (flavorId: string) => request<{ ok: true }>("DELETE", `/admin/pricing/flavors/${encodeURIComponent(flavorId)}`),
+    runBilling: () => request<{ charged: number; total: string; stopped: number }>("POST", "/admin/billing/run", {}),
+    tickets: (status?: TicketStatus) =>
+      request<{ tickets: (Ticket & { customerEmail: string; customerName: string })[] }>(
+        "GET",
+        `/admin/tickets${status ? `?status=${status}` : ""}`,
+      ),
+    audit: () => request<{ entries: AuditEntry[] }>("GET", "/admin/audit?limit=200"),
+  },
 
   listSshKeys: () => request<{ sshKeys: SshKey[] }>("GET", "/ssh-keys"),
   addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),

@@ -9,7 +9,7 @@
  *   await db.select().from(servers).where(eq(servers.ownerId, userId));
  */
 import type { ProjectQuotas } from "@billdude/vhi-connector";
-import { bigint, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["admin", "customer"]);
 export const userStatus = pgEnum("user_status", ["active", "suspended"]);
@@ -179,6 +179,47 @@ export const payments = pgTable(
     paidAt: timestamp("paid_at", { withTimezone: true }),
   },
   (t) => [index("payments_user_idx").on(t.userId, t.createdAt)],
+);
+
+export const ticketStatus = pgEnum("ticket_status", ["open", "answered", "closed"]);
+
+/** Customer support tickets. "open" = waiting on staff, "answered" = waiting on the customer. */
+export const tickets = pgTable(
+  "tickets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    subject: text("subject").notNull(),
+    status: ticketStatus("status").notNull().default("open"),
+    /** Optional server the ticket is about. */
+    serverId: uuid("server_id").references(() => servers.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index("tickets_user_idx").on(t.userId, t.updatedAt), index("tickets_status_idx").on(t.status, t.updatedAt)],
+);
+
+export const ticketMessages = pgTable(
+  "ticket_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => tickets.id),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id),
+    /** true when written by staff (admin), shown as "Support" to the customer. */
+    fromStaff: boolean("from_staff").notNull().default(false),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ticket_messages_ticket_idx").on(t.ticketId, t.createdAt)],
 );
 
 export const auditLogs = pgTable(

@@ -91,7 +91,8 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 - [x] Phase 3 (core) — pricing (formula + per-flavor overrides), per-second metering, prepaid
       wallet + ledger, Razorpay top-ups + webhook, monthly statements, non-payment stop
 - [ ] Phase 3 (rest) — GST tax invoices, low-balance emails, auto-recharge, coupons
-- [ ] Phase 4 — admin: customer mgmt, suspend-on-non-payment, tickets, audit viewer
+- [x] Phase 4 — admin area (overview, customers: suspend/quotas/wallet, pricing, audit log),
+      support tickets for customers and staff
 - [ ] Phase 5 — hardening: CSRF tokens, 2FA, email verification, load tests, Docker images, deploy
 
 ## Known gaps (deliberate for now)

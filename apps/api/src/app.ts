@@ -31,6 +31,7 @@ import { catalogRoutes } from "./routes/catalog.js";
 import { healthRoutes } from "./routes/health.js";
 import { serverRoutes } from "./routes/servers.js";
 import { sshKeyRoutes } from "./routes/ssh-keys.js";
+import { ticketRoutes } from "./routes/tickets.js";
 
 export interface AppDeps {
   config: Config;
@@ -84,6 +85,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await sshKeyRoutes(api, deps);
       await accountRoutes(api, deps);
       await billingRoutes(api, deps);
+      await ticketRoutes(api, deps);
       await adminRoutes(api, deps);
       await adminBillingRoutes(api, deps);
     },
