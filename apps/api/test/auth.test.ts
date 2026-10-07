@@ -70,3 +70,22 @@ describe("auth", () => {
     expect((await bob.get("/api/auth/me")).status).toBe(401);
   });
 });
+
+describe("cross-site protection", () => {
+  it("refuses state-changing requests from foreign origins", async () => {
+    const res = await stack.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { origin: "https://evil.example" },
+      payload: { email: "alice@example.com", password: "correct-horse-battery" },
+    });
+    expect(res.statusCode).toBe(403);
+    const same = await stack.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { origin: "https://portal.test" },
+      payload: { email: "alice@example.com", password: "correct-horse-battery" },
+    });
+    expect(same.statusCode).toBe(200);
+  });
+});

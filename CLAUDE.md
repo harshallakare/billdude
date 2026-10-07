@@ -113,8 +113,10 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
       + security headers/CSP, docs/DEPLOYMENT.md, CI image build
 - [x] Phase 5 (part) — email via queued SMTP: verification (required to create servers),
       password reset/change with session invalidation, ticket + low-balance/overdue/stop notices
-- [ ] Phase 5 (rest) — CSRF tokens, 2FA, load tests
+- [x] Phase 5 (part) — Origin check on state-changing requests (CSRF defence in depth)
+- [ ] Phase 5 (rest) — 2FA, load tests
 
 ## Known gaps (deliberate for now)
 
-- No CSRF token yet (SameSite=Lax + JSON bodies only); add before public launch.
+- CSRF relies on SameSite=Lax cookies + an Origin allow-list (`WEB_ORIGIN`) for
+  POST/PUT/PATCH/DELETE; there is no per-request CSRF token.

@@ -56,6 +56,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     credentials: true,
   });
   await app.register(rateLimit, { global: false });
+
+  // CSRF defence in depth (cookies are already SameSite=Lax): browsers always send Origin on
+  // cross-site POST/PUT/PATCH/DELETE, so refuse state changes from any other site.
+  const allowedOrigins = new Set(config.WEB_ORIGIN.split(",").map((o) => o.trim()));
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
+    if (req.url.startsWith("/api/billing/razorpay/webhook")) return;
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigins.has(origin)) {
+      return reply.code(403).send({ error: "Cross-site request refused" });
+    }
+  });
   await app.register(authPlugin, { db: deps.db, secret: config.JWT_SECRET, secure: config.NODE_ENV === "production" });
 
   app.setErrorHandler((error, req, reply) => {
