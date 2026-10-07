@@ -93,6 +93,45 @@ export const servers = pgTable(
   (t) => [index("servers_owner_idx").on(t.ownerId)],
 );
 
+export const volumeStatus = pgEnum("volume_status", [
+  "creating",
+  "available",
+  "attaching",
+  "attached",
+  "detaching",
+  "deleting",
+  "deleted",
+  "error",
+]);
+
+/** Extra block-storage volumes (Cinder) a customer can attach to their servers. */
+export const volumes = pgTable(
+  "volumes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    sizeGb: integer("size_gb").notNull(),
+    status: volumeStatus("status").notNull().default("creating"),
+    statusMessage: text("status_message"),
+    /** Portal server the volume is attached (or being attached) to. */
+    serverId: uuid("server_id").references(() => servers.id),
+    vhiProjectId: text("vhi_project_id"),
+    vhiVolumeId: text("vhi_volume_id").unique(),
+    billingStartedAt: timestamp("billing_started_at", { withTimezone: true }),
+    billedUntil: timestamp("billed_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [index("volumes_owner_idx").on(t.ownerId), index("volumes_server_idx").on(t.serverId)],
+);
+
 export const sshKeys = pgTable(
   "ssh_keys",
   {
@@ -148,9 +187,9 @@ export const usageRecords = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    serverId: uuid("server_id")
-      .notNull()
-      .references(() => servers.id),
+    /** Exactly one of serverId / volumeId is set. */
+    serverId: uuid("server_id").references(() => servers.id),
+    volumeId: uuid("volume_id").references(() => volumes.id),
     walletTransactionId: uuid("wallet_transaction_id").references(() => walletTransactions.id),
     periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
     periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
@@ -283,6 +322,8 @@ export const auditLogs = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type SshKey = typeof sshKeys.$inferSelect;
+export type VolumeRow = typeof volumes.$inferSelect;
+export type VolumeStatusValue = (typeof volumeStatus.enumValues)[number];
 export type FirewallRuleRow = typeof firewallRules.$inferSelect;
 export type WalletTransaction = typeof walletTransactions.$inferSelect;
 export type Payment = typeof payments.$inferSelect;

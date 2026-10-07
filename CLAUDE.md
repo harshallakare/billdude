@@ -102,7 +102,8 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 - [x] Phase 1 — SSH keys via cloud-init; per-customer VHI projects + quotas; network allow-list
 - [x] Phase 1 — firewall: per-customer inbound rules reconciled onto the project's default
       security group (new projects block inbound traffic by default; SSH + ping seeded)
-- [ ] Phase 1 (rest) — extra volumes, snapshots/backups, floating IPs; test against a real VHI cluster
+- [x] Phase 1 — data volumes (create/attach/detach/delete, quota + storage billing)
+- [ ] Phase 1 (rest) — snapshots/backups, floating IPs; **test against a real VHI cluster**
 - [ ] Phase 2 — portal polish: dashboard, SSH key manager, embedded noVNC
 - [x] Phase 3 (core) — pricing (formula + per-flavor overrides), per-second metering, prepaid
       wallet + ledger, Razorpay top-ups + webhook, monthly statements, non-payment stop

@@ -18,6 +18,7 @@ export const VM_QUEUE = "vm-ops";
 export const ACCOUNT_QUEUE = "account-ops";
 export const BILLING_QUEUE = "billing-ops";
 export const MAIL_QUEUE = "mail";
+export const VOLUME_QUEUE = "volume-ops";
 
 export type VmOp = "create" | "start" | "stop" | "reboot" | "delete";
 
@@ -41,15 +42,24 @@ export interface BillingJobData {
 
 export type MailJobData = MailMessage;
 
+export interface VolumeJobData {
+  /** Portal volume id (volumes.id). */
+  volumeId: string;
+  op: "create" | "attach" | "detach" | "delete";
+  actorId: string | null;
+}
+
 export type VmQueue = Queue<VmJobData>;
 export type AccountQueue = Queue<AccountJobData>;
 export type BillingQueue = Queue<BillingJobData>;
 export type MailQueue = Queue<MailJobData>;
+export type VolumeQueue = Queue<VolumeJobData>;
 export interface Queues {
   vm: VmQueue;
   account: AccountQueue;
   billing: BillingQueue;
   mail: MailQueue;
+  volume: VolumeQueue;
 }
 
 const defaultJobOptions: DefaultJobOptions = {
@@ -66,6 +76,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     account: new Queue<AccountJobData>(ACCOUNT_QUEUE, opts),
     billing: new Queue<BillingJobData>(BILLING_QUEUE, opts),
     mail: new Queue<MailJobData>(MAIL_QUEUE, opts),
+    volume: new Queue<VolumeJobData>(VOLUME_QUEUE, opts),
   };
 }
 
@@ -76,6 +87,10 @@ export async function enqueueVmOp(queue: VmQueue, data: VmJobData): Promise<void
 /** Registers (or updates) the hourly metering schedule. Safe to call on every worker start. */
 export async function scheduleBillingTicks(queue: BillingQueue, everyMs = 3600_000): Promise<void> {
   await queue.upsertJobScheduler("billing-tick", { every: everyMs }, { name: "tick", data: { op: "tick" } });
+}
+
+export async function enqueueVolumeOp(queue: VolumeQueue, data: VolumeJobData): Promise<void> {
+  await queue.add(data.op, data);
 }
 
 export async function enqueueMail(queue: MailQueue, message: MailMessage): Promise<void> {

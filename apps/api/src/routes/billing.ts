@@ -12,16 +12,17 @@
  *   POST /billing/razorpay/webhook       -> Razorpay webhook (no session; HMAC-verified raw body)
  * Amounts in responses are decimal strings in the billing currency ("12.50").
  */
-import { and, desc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
+import { hourlyBurn } from "../billing/burn.js";
 import { paymentFromWebhook } from "../billing/gateway.js";
 import { formatAmount, HOURS_PER_MONTH } from "../billing/money.js";
 import { PaymentMismatchError, settlePayment } from "../billing/payments.js";
 import { loadPriceBook } from "../billing/pricing.js";
-import { payments, servers, usageRecords, users, walletTransactions } from "../db/schema.js";
+import { payments, servers, usageRecords, users, volumes, walletTransactions } from "../db/schema.js";
 
 const topupBody = z.object({ amount: z.number().int().positive() });
 const verifyBody = z.object({ orderId: z.string().min(1), paymentId: z.string().min(1), signature: z.string().min(1) });
@@ -36,13 +37,7 @@ export async function billingRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get("/billing/wallet", { preHandler: app.authenticate }, async (req) => {
     const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
     const prices = await loadPriceBook(db, config);
-    const live = await db
-      .select()
-      .from(servers)
-      .where(and(eq(servers.ownerId, req.user.id), ne(servers.status, "deleted")));
-    const hourly = live
-      .filter((s) => s.billingStartedAt)
-      .reduce((sum, s) => sum + prices.serverHourly({ id: s.flavorId, vcpus: s.flavorVcpus, ramMb: s.flavorRamMb }, s.bootVolumeGb), 0);
+    const hourly = await hourlyBurn(db, prices, req.user.id);
     const balance = user!.balanceMicros;
     return {
       currency,
@@ -157,10 +152,11 @@ export async function billingRoutes(app: FastifyInstance, deps: AppDeps) {
     const start = sql`(${`${month}-01`}::date)::timestamp at time zone ${tz}`;
     const end = sql`((${`${month}-01`}::date + interval '1 month')::date)::timestamp at time zone ${tz}`;
 
+    const resourceId = sql<string>`coalesce(${usageRecords.serverId}, ${usageRecords.volumeId})`;
     const lines = await db
       .select({
-        serverId: usageRecords.serverId,
-        name: servers.name,
+        serverId: resourceId,
+        name: sql<string>`coalesce(${servers.name}, ${volumes.name} || ' (volume)')`,
         flavorId: usageRecords.flavorId,
         diskGb: sql<number>`max(${usageRecords.diskGb})`,
         seconds: sql<string>`sum(extract(epoch from ${usageRecords.periodEnd} - ${usageRecords.periodStart}))`,
@@ -168,10 +164,11 @@ export async function billingRoutes(app: FastifyInstance, deps: AppDeps) {
         storage: sql<string>`sum(${usageRecords.storageMicros})`,
       })
       .from(usageRecords)
-      .innerJoin(servers, eq(servers.id, usageRecords.serverId))
+      .leftJoin(servers, eq(servers.id, usageRecords.serverId))
+      .leftJoin(volumes, eq(volumes.id, usageRecords.volumeId))
       .where(and(eq(usageRecords.userId, req.user.id), gte(usageRecords.periodStart, start), lt(usageRecords.periodStart, end)))
-      .groupBy(usageRecords.serverId, servers.name, usageRecords.flavorId)
-      .orderBy(servers.name);
+      .groupBy(resourceId, servers.name, volumes.name, usageRecords.flavorId)
+      .orderBy(sql`2`);
 
     const txs = await db
       .select()

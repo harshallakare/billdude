@@ -130,6 +130,46 @@ describe("firewall", () => {
   });
 });
 
+describe("volumes", () => {
+  async function waitForVolume(p: VhiProject, id: string, status: string) {
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const v = await p.getVolume(id);
+      if ((v?.status ?? "gone") === status) return v;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`volume ${id} never reached ${status}`);
+  }
+
+  it("creates, attaches, detaches and deletes a data volume", async () => {
+    const { id: serverId } = await project.createServer({ ...SERVER, name: "with-disk" });
+    await waitForStatus(project, serverId, "ACTIVE");
+
+    const { id } = await project.createVolume({ name: "data", sizeGb: 50, metadata: { billdude_volume_id: "v1" } });
+    await waitForVolume(project, id, "available");
+    expect((await project.listVolumes({ metadata: { billdude_volume_id: "v1" } })).map((v) => v.id)).toEqual([id]);
+
+    await project.attachVolume(serverId, id);
+    const attached = await waitForVolume(project, id, "in-use");
+    expect(attached).toMatchObject({ sizeGb: 50, attachedTo: serverId });
+
+    await project.detachVolume(serverId, id);
+    await waitForVolume(project, id, "available");
+    await project.detachVolume(serverId, id); // no-op when not attached
+
+    await project.deleteVolume(id);
+    await waitForVolume(project, id, "gone");
+    await project.deleteVolume(id); // idempotent
+    await project.deleteServer(serverId);
+  });
+
+  it("enforces the gigabytes quota with VhiQuotaError", async () => {
+    const { id: projectId } = await vhi.ensureProject({ name: "billdude-vol-quota" });
+    await vhi.setProjectQuotas(projectId, { instances: 5, cores: 10, ramMb: 20480, volumes: 5, gigabytes: 30 });
+    await expect(vhi.project(projectId).createVolume({ name: "big", sizeGb: 40 })).rejects.toBeInstanceOf(VhiQuotaError);
+  });
+});
+
 describe("server lifecycle", () => {
   it("creates, stops, starts, reboots and deletes a server", async () => {
     const { id } = await project.createServer({

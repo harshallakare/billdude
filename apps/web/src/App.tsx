@@ -10,6 +10,7 @@
  *   /servers/:id               detail + power actions + console
  *   /ssh-keys                  SSH key manager
  *   /firewall                  inbound firewall rules
+ *   /volumes                   data volumes
  *   /billing                   wallet, top-ups, transactions
  *   /billing/statements/:month monthly usage statement
  *   /support, /support/:id     support tickets
@@ -30,6 +31,7 @@ import { AccountPage } from "./pages/Account";
 import { BillingPage } from "./pages/Billing";
 import { CreateServerPage } from "./pages/CreateServer";
 import { FirewallPage } from "./pages/Firewall";
+import { VolumesPage } from "./pages/Volumes";
 import { LoginPage } from "./pages/Login";
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from "./pages/PasswordReset";
 import { RegisterPage } from "./pages/Register";
@@ -68,6 +70,7 @@ export function App() {
         <Route path="/servers/:id" element={<ServerDetailPage />} />
         <Route path="/ssh-keys" element={<SshKeysPage />} />
         <Route path="/firewall" element={<FirewallPage />} />
+        <Route path="/volumes" element={<VolumesPage />} />
         <Route path="/account" element={<AccountPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/billing/statements/:month" element={<StatementPage />} />

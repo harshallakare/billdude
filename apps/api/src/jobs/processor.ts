@@ -4,7 +4,7 @@
  * Usage: the business logic for every background job, independent of BullMQ
  * so it can be tested directly:
  *
- *   const { processVmJob, processAccountJob } = createProcessors({ db, vhi, accounts, pollMs: 3000 });
+ *   const { processVmJob, processAccountJob, processVolumeJob } = createProcessors({ db, vhi, accounts, pollMs: 3000 });
  *   await processVmJob({ serverId, op: "create", actorId });
  *   await processAccountJob({ userId, op: "provision" });
  *
@@ -19,15 +19,17 @@ import {
   type ServerStatus,
   type VhiConnector,
   type VhiProject,
+  type Volume,
+  type VolumeStatus,
 } from "@billdude/vhi-connector";
 import { UnrecoverableError } from "bullmq";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { AccountService } from "../accounts.js";
 import { audit } from "../audit.js";
 import type { Db } from "../db/client.js";
-import { servers, type ServerRow, type ServerStatusValue } from "../db/schema.js";
+import { servers, volumes, type ServerRow, type ServerStatusValue, type VolumeRow } from "../db/schema.js";
 import { buildCloudInit } from "../ssh.js";
-import type { AccountJobData, VmJobData } from "./queue.js";
+import type { AccountJobData, VmJobData, VolumeJobData } from "./queue.js";
 
 export interface ProcessorDeps {
   db: Db;
@@ -42,6 +44,7 @@ export interface ProcessorDeps {
 /** Metadata key linking a Nova server back to the portal row. */
 export const SERVER_TAG = "billdude_server_id";
 export const ACCOUNT_TAG = "billdude_account_id";
+export const VOLUME_TAG = "billdude_volume_id";
 
 class TimeoutError extends Error {}
 
@@ -130,6 +133,101 @@ export function createProcessors(deps: ProcessorDeps) {
       await waitFor(project, row.vhiServerId, ["GONE"]);
     }
     await update(row.id, { status: "deleted", deletedAt: new Date(), statusMessage: null });
+    // VHI detaches data volumes from deleted servers; mirror that.
+    await db
+      .update(volumes)
+      .set({ serverId: null, status: "available", statusMessage: null })
+      .where(and(eq(volumes.serverId, row.id), inArray(volumes.status, ["attached", "attaching", "detaching"])));
+  }
+
+  /* ---------------- volumes ---------------- */
+
+  const updateVolume = (id: string, values: Partial<VolumeRow>) => db.update(volumes).set(values).where(eq(volumes.id, id));
+
+  async function waitForVolume(project: VhiProject, vhiId: string, targets: (VolumeStatus | "GONE")[]): Promise<Volume | null> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const volume = await project.getVolume(vhiId);
+      if (!volume) {
+        if (targets.includes("GONE")) return null;
+        throw new UnrecoverableError(`Volume ${vhiId} disappeared from VHI`);
+      }
+      if (targets.includes(volume.status)) return volume;
+      if (volume.status === "error") return volume;
+      if (Date.now() > deadline) throw new TimeoutError(`Timed out waiting for volume ${vhiId} to reach ${targets.join("/")}`);
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  }
+
+  async function createVolume(row: VolumeRow): Promise<void> {
+    let projectId = row.vhiProjectId;
+    if (!projectId) {
+      projectId = await accounts.ensureProject(row.ownerId);
+      await updateVolume(row.id, { vhiProjectId: projectId });
+    }
+    const project = vhi.project(projectId);
+    let vhiId = row.vhiVolumeId;
+    if (!vhiId) {
+      const [existing] = await project.listVolumes({ metadata: { [VOLUME_TAG]: row.id } });
+      vhiId =
+        existing?.id ??
+        (await project.createVolume({ name: row.name, sizeGb: row.sizeGb, metadata: { [VOLUME_TAG]: row.id, [ACCOUNT_TAG]: row.ownerId } }))
+          .id;
+      await updateVolume(row.id, { vhiVolumeId: vhiId });
+    }
+    const volume = await waitForVolume(project, vhiId, ["available"]);
+    if (volume?.status === "error") {
+      await updateVolume(row.id, { status: "error", statusMessage: "VHI could not create the volume" });
+      return;
+    }
+    await updateVolume(row.id, { status: "available", statusMessage: null, billingStartedAt: row.billingStartedAt ?? new Date() });
+  }
+
+  async function attachVolume(row: VolumeRow): Promise<void> {
+    if (!row.vhiVolumeId || !row.vhiProjectId || !row.serverId) throw new UnrecoverableError("Volume or target server missing");
+    const [server] = await db.select().from(servers).where(eq(servers.id, row.serverId));
+    if (!server?.vhiServerId) throw new UnrecoverableError("The server is not provisioned");
+    const project = vhi.project(row.vhiProjectId);
+    const current = await project.getVolume(row.vhiVolumeId);
+    if (current?.status !== "in-use") await project.attachVolume(server.vhiServerId, row.vhiVolumeId);
+    const volume = await waitForVolume(project, row.vhiVolumeId, ["in-use"]);
+    if (volume?.status === "error") {
+      await updateVolume(row.id, { status: "error", statusMessage: "VHI could not attach the volume" });
+      return;
+    }
+    await updateVolume(row.id, { status: "attached", statusMessage: null });
+  }
+
+  async function detachVolume(row: VolumeRow): Promise<void> {
+    if (!row.vhiVolumeId || !row.vhiProjectId) throw new UnrecoverableError("Volume was never provisioned");
+    const project = vhi.project(row.vhiProjectId);
+    const current = await project.getVolume(row.vhiVolumeId);
+    if (current?.attachedTo) await project.detachVolume(current.attachedTo, row.vhiVolumeId);
+    await waitForVolume(project, row.vhiVolumeId, ["available"]);
+    await updateVolume(row.id, { status: "available", serverId: null, statusMessage: null });
+  }
+
+  async function deleteVolume(row: VolumeRow): Promise<void> {
+    if (row.vhiVolumeId && row.vhiProjectId) {
+      const project = vhi.project(row.vhiProjectId);
+      await project.deleteVolume(row.vhiVolumeId);
+      await waitForVolume(project, row.vhiVolumeId, ["GONE"]);
+    }
+    await updateVolume(row.id, { status: "deleted", deletedAt: new Date(), serverId: null, statusMessage: null });
+  }
+
+  async function processVolumeJob(job: VolumeJobData): Promise<void> {
+    const [row] = await db.select().from(volumes).where(eq(volumes.id, job.volumeId));
+    if (!row || row.status === "deleted") return;
+    try {
+      if (job.op === "create") await createVolume(row);
+      else if (job.op === "attach") await attachVolume(row);
+      else if (job.op === "detach") await detachVolume(row);
+      else await deleteVolume(row);
+    } catch (error) {
+      classify(error);
+    }
+    await audit(db, { actorId: null, action: `volume.${job.op}.completed`, targetType: "volume", targetId: row.id });
   }
 
   /** Transient cloud errors are retried by BullMQ; everything else fails fast. */
@@ -175,7 +273,16 @@ export function createProcessors(deps: ProcessorDeps) {
     }
   }
 
-  return { processVmJob, processAccountJob };
+  return { processVmJob, processAccountJob, processVolumeJob };
+}
+
+/** Called when a volume job has exhausted its retries. */
+export async function markVolumeJobFailed(db: Db, job: VolumeJobData, reason: string): Promise<void> {
+  await db
+    .update(volumes)
+    .set({ status: "error", statusMessage: `${job.op} failed: ${reason}` })
+    .where(eq(volumes.id, job.volumeId));
+  await audit(db, { actorId: null, action: `volume.${job.op}.failed`, targetType: "volume", targetId: job.volumeId, data: { reason } });
 }
 
 /** Called when a VM job has exhausted its retries: surface the failure on the server row. */

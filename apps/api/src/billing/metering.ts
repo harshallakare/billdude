@@ -10,7 +10,8 @@
  * Billing rules (DigitalOcean-style):
  *   - A server is billed per second from the moment it first became active
  *     until it is deleted, whether it is running or stopped (its resources
- *     stay reserved on VHI).
+ *     stay reserved on VHI). Data volumes are billed for storage from the
+ *     moment they are available until deleted, attached or not.
  *   - Each run charges every server from `billed_until` up to now (or its
  *     deletion time) and posts one "usage" debit per customer.
  *   - Runs are idempotent: the server's `billed_until` is advanced with a
@@ -25,9 +26,10 @@ import { and, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-or
 import { audit } from "../audit.js";
 import type { Config } from "../config.js";
 import type { Db } from "../db/client.js";
-import { servers, usageRecords, users, type ServerRow } from "../db/schema.js";
+import { servers, usageRecords, users, volumes, type ServerRow, type VolumeRow } from "../db/schema.js";
 import { enqueueMail, enqueueVmOp, type Queues } from "../jobs/queue.js";
 import { templates } from "../mail/templates.js";
+import { hourlyBurn } from "./burn.js";
 import { postTransaction } from "./ledger.js";
 import { formatAmount } from "./money.js";
 import { charge, loadPriceBook, type PriceBook } from "./pricing.js";
@@ -39,17 +41,22 @@ export interface MeteringDeps {
 }
 
 export interface TickResult {
-  /** Servers that were charged in this run. */
+  /** Servers and volumes that were charged in this run. */
   charged: number;
   totalMicros: number;
   /** Servers stopped for non-payment. */
   stopped: number;
 }
 
+/** Something billed per second: a server (compute + boot disk) or a data volume (storage only). */
+type Billable =
+  | { kind: "server"; row: ServerRow }
+  | { kind: "volume"; row: VolumeRow };
+
 export async function runBillingTick({ db, config, queues }: MeteringDeps, now = new Date()): Promise<TickResult> {
   const prices = await loadPriceBook(db, config);
 
-  const due = await db
+  const dueServers = await db
     .select()
     .from(servers)
     .where(
@@ -58,52 +65,58 @@ export async function runBillingTick({ db, config, queues }: MeteringDeps, now =
         or(isNull(servers.billedUntil), lt(servers.billedUntil, sql`coalesce(${servers.deletedAt}, ${now})`)),
       ),
     );
+  const dueVolumes = await db
+    .select()
+    .from(volumes)
+    .where(
+      and(
+        isNotNull(volumes.billingStartedAt),
+        or(isNull(volumes.billedUntil), lt(volumes.billedUntil, sql`coalesce(${volumes.deletedAt}, ${now})`)),
+      ),
+    );
 
-  const byUser = new Map<string, ServerRow[]>();
-  for (const row of due) byUser.set(row.ownerId, [...(byUser.get(row.ownerId) ?? []), row]);
+  const byUser = new Map<string, Billable[]>();
+  const add = (userId: string, item: Billable) => byUser.set(userId, [...(byUser.get(userId) ?? []), item]);
+  for (const row of dueServers) add(row.ownerId, { kind: "server", row });
+  for (const row of dueVolumes) add(row.ownerId, { kind: "volume", row });
 
   let charged = 0;
   let totalMicros = 0;
 
-  for (const [userId, rows] of byUser) {
+  for (const [userId, items] of byUser) {
     await db.transaction(async (tx) => {
       let userTotal = 0;
       const records: (typeof usageRecords.$inferInsert)[] = [];
 
-      for (const row of rows) {
+      for (const item of items) {
+        const { row } = item;
         const start = row.billedUntil ?? row.billingStartedAt!;
         const end = row.deletedAt && row.deletedAt < now ? row.deletedAt : now;
         const seconds = Math.floor((end.getTime() - start.getTime()) / 1000);
         if (seconds <= 0) continue;
         const periodEnd = new Date(start.getTime() + seconds * 1000);
 
-        // Guarded advance: if another run already moved billed_until, skip this server.
+        // Guarded advance: if another run already moved billed_until, skip this resource.
+        const table = item.kind === "server" ? servers : volumes;
         const [advanced] = await tx
-          .update(servers)
+          .update(table)
           .set({ billedUntil: periodEnd })
-          .where(
-            and(
-              eq(servers.id, row.id),
-              row.billedUntil ? eq(servers.billedUntil, row.billedUntil) : isNull(servers.billedUntil),
-            ),
-          )
-          .returning({ id: servers.id });
+          .where(and(eq(table.id, row.id), row.billedUntil ? eq(table.billedUntil, row.billedUntil) : isNull(table.billedUntil)))
+          .returning({ id: table.id });
         if (!advanced) continue;
 
-        const flavor = { id: row.flavorId, vcpus: row.flavorVcpus, ramMb: row.flavorRamMb };
-        const computeMicros = charge(seconds, prices.flavorHourly(flavor));
-        const storageMicros = charge(seconds, row.bootVolumeGb * prices.storageGbHourly);
-        records.push({
-          userId,
-          serverId: row.id,
-          periodStart: start,
-          periodEnd,
-          flavorId: row.flavorId,
-          diskGb: row.bootVolumeGb,
-          computeMicros,
-          storageMicros,
-        });
-        userTotal += computeMicros + storageMicros;
+        if (item.kind === "server") {
+          const s = item.row;
+          const computeMicros = charge(seconds, prices.flavorHourly({ id: s.flavorId, vcpus: s.flavorVcpus, ramMb: s.flavorRamMb }));
+          const storageMicros = charge(seconds, s.bootVolumeGb * prices.storageGbHourly);
+          records.push({ userId, serverId: s.id, periodStart: start, periodEnd, flavorId: s.flavorId, diskGb: s.bootVolumeGb, computeMicros, storageMicros });
+          userTotal += computeMicros + storageMicros;
+        } else {
+          const v = item.row;
+          const storageMicros = charge(seconds, v.sizeGb * prices.storageGbHourly);
+          records.push({ userId, volumeId: v.id, periodStart: start, periodEnd, flavorId: "volume", diskGb: v.sizeGb, computeMicros: 0, storageMicros });
+          userTotal += storageMicros;
+        }
       }
 
       if (records.length === 0) return;
@@ -111,7 +124,7 @@ export async function runBillingTick({ db, config, queues }: MeteringDeps, now =
         userId,
         type: "usage",
         amountMicros: -userTotal,
-        description: `Usage for ${records.length} server${records.length === 1 ? "" : "s"} (${formatAmount(userTotal)} ${config.BILLING_CURRENCY})`,
+        description: `Usage for ${records.length} resource${records.length === 1 ? "" : "s"} (${formatAmount(userTotal)} ${config.BILLING_CURRENCY})`,
       });
       await tx.insert(usageRecords).values(records.map((r) => ({ ...r, walletTransactionId: transaction?.id })));
       charged += records.length;
@@ -181,14 +194,7 @@ async function notifyBalances({ db, config, queues }: MeteringDeps, now: Date, p
       continue;
     }
 
-    const live = await db
-      .select()
-      .from(servers)
-      .where(and(eq(servers.ownerId, user.id), ne(servers.status, "deleted"), isNotNull(servers.billingStartedAt)));
-    const hourly = live.reduce(
-      (sum, s) => sum + prices.serverHourly({ id: s.flavorId, vcpus: s.flavorVcpus, ramMb: s.flavorRamMb }, s.bootVolumeGb),
-      0,
-    );
+    const hourly = await hourlyBurn(db, prices, user.id);
     if (hourly <= 0) continue;
     const hoursLeft = Math.floor(user.balanceMicros / hourly);
     if (hoursLeft >= 24) continue;

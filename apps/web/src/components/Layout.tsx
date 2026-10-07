@@ -28,6 +28,9 @@ export function Layout() {
             <NavLink to="/servers" className={navClass}>
               Servers
             </NavLink>
+            <NavLink to="/volumes" className={navClass}>
+              Volumes
+            </NavLink>
             <NavLink to="/ssh-keys" className={navClass}>
               SSH keys
             </NavLink>

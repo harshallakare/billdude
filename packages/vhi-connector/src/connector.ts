@@ -23,6 +23,7 @@ import type {
   PowerAction,
   ProjectQuotas,
   Server,
+  Volume,
 } from "./types.js";
 
 export interface VhiConnector {
@@ -60,4 +61,17 @@ export interface VhiProject {
    * same-group rule are left alone. Idempotent; returns what changed.
    */
   syncFirewall(rules: FirewallRule[]): Promise<{ added: number; removed: number }>;
+
+  /** Data volumes (Cinder). Creation is asynchronous: poll getVolume() for "available". */
+  createVolume(input: { name: string; sizeGb: number; metadata?: Record<string, string> }): Promise<{ id: string }>;
+  /** Volumes whose metadata matches every given key. */
+  listVolumes(filter?: { metadata?: Record<string, string> }): Promise<Volume[]>;
+  /** Returns null when the volume does not exist. */
+  getVolume(id: string): Promise<Volume | null>;
+  /** Asynchronous; poll getVolume() for "in-use". */
+  attachVolume(serverId: string, volumeId: string): Promise<void>;
+  /** Asynchronous; poll getVolume() for "available". Detaching an unattached volume resolves normally. */
+  detachVolume(serverId: string, volumeId: string): Promise<void>;
+  /** Idempotent: deleting a volume that is already gone resolves normally. */
+  deleteVolume(id: string): Promise<void>;
 }

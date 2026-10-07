@@ -20,6 +20,8 @@
  *   - Every project gets a Neutron-style "default" security group (egress
  *     allowed, inbound only from the same group) on first use; rules can be
  *     listed, added (duplicates -> 409) and deleted.
+ *   - Cinder data volumes (creating -> available -> attaching -> in-use ...)
+ *     with Nova volume attachments; deleting a server detaches its volumes.
  *   - VMs sit in BUILD for `buildMs`, then become ACTIVE with a fixed IP.
  *   - Any server whose name contains "fail" ends in ERROR with a Nova-style fault.
  *   - start/stop/reboot/delete complete after `actionMs`; invalid state
@@ -58,6 +60,17 @@ interface MockServer {
   fault?: string;
   /** Pending lazy transition: becomes `to` once Date.now() >= at ("GONE" removes the server). */
   pending?: { to: Status | "GONE"; at: number; fault?: string };
+}
+
+interface MockVolume {
+  id: string;
+  projectId: string;
+  name: string;
+  size: number;
+  status: "creating" | "available" | "attaching" | "in-use" | "detaching" | "deleting";
+  serverId: string | null;
+  metadata: Record<string, string>;
+  pending?: { to: MockVolume["status"] | "GONE"; at: number; serverId?: string | null };
 }
 
 interface MockProject {
@@ -141,6 +154,31 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
   const consoleTokens = new Map<string, string>();
   const securityGroups = new Map<string, { id: string; name: string; project_id: string }>();
   const sgRules = new Map<string, SecurityGroupRule>();
+  const volumes = new Map<string, MockVolume>();
+
+  const settleVolume = (v: MockVolume): MockVolume | null => {
+    if (v.pending && Date.now() >= v.pending.at) {
+      const { to, serverId } = v.pending;
+      v.pending = undefined;
+      if (to === "GONE") {
+        volumes.delete(v.id);
+        return null;
+      }
+      v.status = to;
+      if (serverId !== undefined) v.serverId = serverId;
+    }
+    return v;
+  };
+  const liveVolumes = (projectId: string) =>
+    [...volumes.values()].map(settleVolume).filter((v): v is MockVolume => v !== null && v.projectId === projectId);
+  const toCinder = (v: MockVolume) => ({
+    id: v.id,
+    name: v.name,
+    size: v.size,
+    status: v.status,
+    attachments: v.serverId && (v.status === "in-use" || v.status === "detaching") ? [{ server_id: v.serverId, volume_id: v.id }] : [],
+    metadata: v.metadata,
+  });
   let nextIp = 10;
 
   /** Neutron creates a project's default group lazily; so do we. */
@@ -177,6 +215,14 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
       server.pending = undefined;
       if (to === "GONE") {
         servers.delete(server.id);
+        // Nova detaches data volumes when their server is deleted.
+        for (const v of volumes.values()) {
+          if (v.serverId === server.id) {
+            v.serverId = null;
+            v.status = "available";
+            v.pending = undefined;
+          }
+        }
         return null;
       }
       server.status = to;
@@ -461,19 +507,32 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
 
     // Quota enforcement, using the same wording as Nova.
     const q = quotasFor(projectId);
+    const dataVolumes = liveVolumes(projectId);
     const used = liveServers(projectId).reduce(
       (acc, s) => {
         const f = FLAVORS.find((x) => x.id === s.flavorId)!;
-        return { instances: acc.instances + 1, cores: acc.cores + f.vcpus, ram: acc.ram + f.ram, gigabytes: acc.gigabytes + s.bootVolumeGb };
+        return {
+          instances: acc.instances + 1,
+          cores: acc.cores + f.vcpus,
+          ram: acc.ram + f.ram,
+          volumes: acc.volumes + 1,
+          gigabytes: acc.gigabytes + s.bootVolumeGb,
+        };
       },
-      { instances: 0, cores: 0, ram: 0, gigabytes: 0 },
+      {
+        instances: 0,
+        cores: 0,
+        ram: 0,
+        volumes: dataVolumes.length,
+        gigabytes: dataVolumes.reduce((sum, v) => sum + v.size, 0),
+      },
     );
     const over = (
       [
         ["instances", 1, used.instances, q.instances],
         ["cores", flavor.vcpus, used.cores, q.cores],
         ["ram", flavor.ram, used.ram, q.ram],
-        ["volumes", 1, used.instances, q.volumes],
+        ["volumes", 1, used.volumes, q.volumes],
         ["gigabytes", bootVolumeGb, used.gigabytes, q.gigabytes],
       ] as const
     ).find(([, requested, inUse, limit]) => limit >= 0 && inUse + requested > limit);
@@ -559,6 +618,94 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
       },
     };
   });
+
+  /* ---------------- Cinder volumes + Nova attachments ---------------- */
+
+  app.post<{ Params: { tenant: string } }>("/volume/v3/:tenant/volumes", async (req, reply) => {
+    const projectId = scopeOf(req).projectId;
+    const body = (req.body as { volume?: { name?: string; size?: number; metadata?: Record<string, string> } }).volume ?? {};
+    if (!body.size || body.size < 1) return error(reply, 400, "badRequest", "Invalid input received: size must be >= 1");
+    const q = quotasFor(projectId);
+    const dataVolumes = liveVolumes(projectId);
+    const boot = liveServers(projectId);
+    const usedVolumes = dataVolumes.length + boot.length;
+    const usedGb = dataVolumes.reduce((s, v) => s + v.size, 0) + boot.reduce((s, b) => s + b.bootVolumeGb, 0);
+    if (q.volumes >= 0 && usedVolumes + 1 > q.volumes) {
+      return error(reply, 413, "overLimit", `VolumeLimitExceeded: Maximum number of volumes allowed (${q.volumes}) exceeded for quota 'volumes'.`);
+    }
+    if (q.gigabytes >= 0 && usedGb + body.size > q.gigabytes) {
+      return error(reply, 413, "overLimit", `VolumeSizeExceedsAvailableQuota: Requested volume or snapshot exceeds allowed gigabytes quota. Requested ${body.size}G, quota is ${q.gigabytes}G and ${usedGb}G has been consumed.`);
+    }
+    const volume: MockVolume = {
+      id: randomUUID(),
+      projectId,
+      name: body.name ?? "",
+      size: body.size,
+      status: "creating",
+      serverId: null,
+      metadata: body.metadata ?? {},
+      pending: { to: "available", at: Date.now() + actionMs },
+    };
+    volumes.set(volume.id, volume);
+    return reply.code(202).send({ volume: toCinder(volume) });
+  });
+
+  app.get("/volume/v3/:tenant/volumes/detail", async (req) => ({
+    volumes: liveVolumes(scopeOf(req).projectId).map(toCinder),
+  }));
+
+  const findVolume = (req: FastifyRequest, id: string) => {
+    const volume = volumes.get(id);
+    if (!volume || volume.projectId !== scopeOf(req).projectId) return null;
+    return settleVolume(volume);
+  };
+
+  app.get<{ Params: { id: string } }>("/volume/v3/:tenant/volumes/:id", async (req, reply) => {
+    const volume = findVolume(req, req.params.id);
+    if (!volume) return error(reply, 404, "itemNotFound", `Volume ${req.params.id} could not be found.`);
+    return { volume: toCinder(volume) };
+  });
+
+  app.delete<{ Params: { id: string } }>("/volume/v3/:tenant/volumes/:id", async (req, reply) => {
+    const volume = findVolume(req, req.params.id);
+    if (!volume) return error(reply, 404, "itemNotFound", `Volume ${req.params.id} could not be found.`);
+    if (volume.status !== "available" || volume.pending) {
+      return error(reply, 400, "badRequest", "Invalid volume: Volume status must be available or error or error_restoring or error_extending or error_managing and must not be migrating, attached, belong to a group, have snapshots or be disassociated from snapshots after volume transfer.");
+    }
+    volume.status = "deleting";
+    volume.pending = { to: "GONE", at: Date.now() + actionMs };
+    return reply.code(202).send();
+  });
+
+  app.post<{ Params: { id: string } }>("/compute/v2.1/servers/:id/os-volume_attachments", async (req, reply) => {
+    const server = findServer(req, req.params.id);
+    if (!server) return error(reply, 404, "itemNotFound", `Instance ${req.params.id} could not be found.`);
+    const volumeId = (req.body as { volumeAttachment?: { volumeId?: string } }).volumeAttachment?.volumeId ?? "";
+    const volume = findVolume(req, volumeId);
+    if (!volume) return error(reply, 404, "itemNotFound", `Volume ${volumeId} could not be found.`);
+    if (volume.status !== "available" || volume.pending) {
+      return error(reply, 400, "badRequest", `Invalid volume: volume ${volumeId} status must be 'available'. Currently in '${volume.status}'`);
+    }
+    volume.status = "attaching";
+    volume.pending = { to: "in-use", at: Date.now() + actionMs, serverId: server.id };
+    volume.serverId = server.id;
+    return { volumeAttachment: { id: volume.id, serverId: server.id, volumeId: volume.id, device: "/dev/vdb" } };
+  });
+
+  app.delete<{ Params: { id: string; volumeId: string } }>(
+    "/compute/v2.1/servers/:id/os-volume_attachments/:volumeId",
+    async (req, reply) => {
+      const server = findServer(req, req.params.id);
+      if (!server) return error(reply, 404, "itemNotFound", `Instance ${req.params.id} could not be found.`);
+      const volume = findVolume(req, req.params.volumeId);
+      if (!volume || volume.serverId !== server.id || volume.status !== "in-use") {
+        return error(reply, 404, "itemNotFound", `Volume ${req.params.volumeId} is not attached to instance ${server.id}.`);
+      }
+      volume.status = "detaching";
+      volume.pending = { to: "available", at: Date.now() + actionMs, serverId: null };
+      return reply.code(202).send();
+    },
+  );
 
   /* ---------------- Test inspection (not part of OpenStack) ---------------- */
 

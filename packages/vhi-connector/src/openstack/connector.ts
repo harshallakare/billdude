@@ -35,6 +35,8 @@ import type {
   Server,
   ServerAddress,
   ServerStatus,
+  Volume,
+  VolumeStatus,
 } from "../types.js";
 import { OpenStackClient, type OpenStackCredentials } from "./client.js";
 
@@ -72,6 +74,15 @@ interface GlanceImage {
   status: string;
   min_disk?: number;
   min_ram?: number;
+}
+
+interface CinderVolume {
+  id: string;
+  name: string | null;
+  size: number;
+  status: string;
+  attachments?: { server_id: string }[];
+  metadata?: Record<string, string>;
 }
 
 interface NeutronRule {
@@ -355,6 +366,64 @@ class OpenStackVhiProject implements VhiProject {
     return { added, removed };
   }
 
+  async createVolume(input: { name: string; sizeGb: number; metadata?: Record<string, string> }): Promise<{ id: string }> {
+    const body = await this.client.request<{ volume: { id: string } }>("volumev3", "POST", "/volumes", {
+      body: {
+        volume: {
+          name: input.name,
+          size: input.sizeGb,
+          ...(this.options.volumeType ? { volume_type: this.options.volumeType } : {}),
+          ...(input.metadata ? { metadata: input.metadata } : {}),
+        },
+      },
+    });
+    return { id: body.volume.id };
+  }
+
+  async listVolumes(filter: { metadata?: Record<string, string> } = {}): Promise<Volume[]> {
+    const body = await this.client.request<{ volumes: CinderVolume[] }>("volumev3", "GET", "/volumes/detail");
+    const wanted = Object.entries(filter.metadata ?? {});
+    return body.volumes.map(toVolume).filter((v) => wanted.every(([k, val]) => v.metadata[k] === val));
+  }
+
+  async getVolume(id: string): Promise<Volume | null> {
+    try {
+      const body = await this.client.request<{ volume: CinderVolume }>("volumev3", "GET", `/volumes/${encodeURIComponent(id)}`);
+      return toVolume(body.volume);
+    } catch (error) {
+      if (error instanceof VhiNotFoundError) return null;
+      throw error;
+    }
+  }
+
+  async attachVolume(serverId: string, volumeId: string): Promise<void> {
+    await this.client.request("compute", "POST", `/servers/${encodeURIComponent(serverId)}/os-volume_attachments`, {
+      body: { volumeAttachment: { volumeId } },
+    });
+  }
+
+  async detachVolume(serverId: string, volumeId: string): Promise<void> {
+    try {
+      await this.client.request(
+        "compute",
+        "DELETE",
+        `/servers/${encodeURIComponent(serverId)}/os-volume_attachments/${encodeURIComponent(volumeId)}`,
+      );
+    } catch (error) {
+      if (error instanceof VhiNotFoundError) return;
+      throw error;
+    }
+  }
+
+  async deleteVolume(id: string): Promise<void> {
+    try {
+      await this.client.request("volumev3", "DELETE", `/volumes/${encodeURIComponent(id)}`);
+    } catch (error) {
+      if (error instanceof VhiNotFoundError) return;
+      throw error;
+    }
+  }
+
   private async defaultSecurityGroupId(): Promise<string> {
     const body = await this.client.request<{ security_groups: { id: string; project_id?: string; tenant_id?: string }[] }>(
       "network",
@@ -390,6 +459,24 @@ function fromNeutronRule(r: NeutronRule): FirewallRule {
 
 function ruleKey(r: FirewallRule): string {
   return `${r.protocol}|${r.portMin ?? ""}|${r.portMax ?? ""}|${r.cidr}`;
+}
+
+const VOLUME_STATUSES = new Set<VolumeStatus>(["creating", "available", "attaching", "in-use", "detaching", "deleting", "error"]);
+
+function toVolume(v: CinderVolume): Volume {
+  const status = v.status.startsWith("error")
+    ? "error"
+    : VOLUME_STATUSES.has(v.status as VolumeStatus)
+      ? (v.status as VolumeStatus)
+      : "unknown";
+  return {
+    id: v.id,
+    name: v.name ?? v.id,
+    sizeGb: v.size,
+    status,
+    attachedTo: v.attachments?.[0]?.server_id ?? null,
+    metadata: v.metadata ?? {},
+  };
 }
 
 function toServer(s: NovaServer): Server {

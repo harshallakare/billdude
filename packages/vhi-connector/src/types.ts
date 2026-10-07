@@ -103,3 +103,24 @@ export interface FirewallRule {
 export interface AppliedFirewallRule extends FirewallRule {
   id: string;
 }
+
+/** Normalised Cinder volume state. */
+export type VolumeStatus =
+  | "creating"
+  | "available"
+  | "attaching"
+  | "in-use"
+  | "detaching"
+  | "deleting"
+  | "error"
+  | "unknown";
+
+export interface Volume {
+  id: string;
+  name: string;
+  sizeGb: number;
+  status: VolumeStatus;
+  /** Nova server id the volume is attached to, if any. */
+  attachedTo: string | null;
+  metadata: Record<string, string>;
+}

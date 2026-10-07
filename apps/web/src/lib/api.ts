@@ -210,6 +210,19 @@ export interface FirewallRule {
   createdAt: string;
 }
 
+export type VolumeStatus = "creating" | "available" | "attaching" | "attached" | "detaching" | "deleting" | "deleted" | "error";
+
+export interface Volume {
+  id: string;
+  name: string;
+  sizeGb: number;
+  status: VolumeStatus;
+  statusMessage: string | null;
+  serverId: string | null;
+  serverName: string | null;
+  createdAt: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -295,6 +308,12 @@ export const api = {
     audit: () => request<{ entries: AuditEntry[] }>("GET", "/admin/audit?limit=200"),
   },
 
+  volumes: () => request<{ volumes: Volume[] }>("GET", "/volumes"),
+  createVolume: (name: string, sizeGb: number) => request<{ volume: Volume }>("POST", "/volumes", { name, sizeGb }),
+  attachVolume: (id: string, serverId: string) => request<{ volume: Volume }>("POST", `/volumes/${id}/attach`, { serverId }),
+  detachVolume: (id: string) => request<{ volume: Volume }>("POST", `/volumes/${id}/detach`, {}),
+  deleteVolume: (id: string) => request<{ volume: Volume }>("DELETE", `/volumes/${id}`),
+
   firewall: () => request<{ rules: FirewallRule[] }>("GET", "/firewall"),
   addFirewallRule: (rule: Omit<FirewallRule, "id" | "createdAt">) => request<{ rule: FirewallRule }>("POST", "/firewall", rule),
   deleteFirewallRule: (id: string) => request<{ ok: true }>("DELETE", `/firewall/${id}`),
@@ -303,6 +322,8 @@ export const api = {
   addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),
   deleteSshKey: (id: string) => request<{ ok: true }>("DELETE", `/ssh-keys/${id}`),
 };
+
+export const VOLUME_TRANSITIONAL: VolumeStatus[] = ["creating", "attaching", "detaching", "deleting"];
 
 /** Statuses during which the UI should keep polling. */
 export const TRANSITIONAL: ServerStatus[] = ["pending", "building", "stopping", "starting", "rebooting", "deleting"];

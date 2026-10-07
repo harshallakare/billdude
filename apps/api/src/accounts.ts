@@ -16,7 +16,7 @@ import type { Flavor, ProjectQuotas, VhiConnector } from "@billdude/vhi-connecto
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { defaultQuotas, type Config } from "./config.js";
 import type { Db } from "./db/client.js";
-import { firewallRules, servers, users, type User } from "./db/schema.js";
+import { firewallRules, servers, users, volumes, type User } from "./db/schema.js";
 import { toConnectorRules } from "./firewall.js";
 
 export interface AccountDeps {
@@ -74,14 +74,18 @@ export function createAccountService({ db, vhi, config }: AccountDeps) {
 
 export type AccountService = ReturnType<typeof createAccountService>;
 
-/** Resources currently held by a customer, computed from portal records. */
+/** Resources currently held by a customer (servers, boot disks and data volumes), from portal records. */
 export async function computeUsage(db: Db, flavors: Flavor[], userId: string): Promise<ProjectQuotas> {
   const rows = await db
     .select({ flavorId: servers.flavorId, bootVolumeGb: servers.bootVolumeGb })
     .from(servers)
     .where(and(eq(servers.ownerId, userId), ne(servers.status, "deleted")));
+  const dataVolumes = await db
+    .select({ sizeGb: volumes.sizeGb })
+    .from(volumes)
+    .where(and(eq(volumes.ownerId, userId), ne(volumes.status, "deleted")));
   const byId = new Map(flavors.map((f) => [f.id, f]));
-  return rows.reduce<ProjectQuotas>(
+  const fromServers = rows.reduce<ProjectQuotas>(
     (acc, row) => {
       const flavor = byId.get(row.flavorId);
       return {
@@ -94,6 +98,11 @@ export async function computeUsage(db: Db, flavors: Flavor[], userId: string): P
     },
     { instances: 0, cores: 0, ramMb: 0, volumes: 0, gigabytes: 0 },
   );
+  return {
+    ...fromServers,
+    volumes: fromServers.volumes + dataVolumes.length,
+    gigabytes: fromServers.gigabytes + dataVolumes.reduce((sum, v) => sum + v.sizeGb, 0),
+  };
 }
 
 /** Returns the first quota the request would exceed, or null. */

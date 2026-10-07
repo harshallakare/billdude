@@ -5,7 +5,7 @@
  * Polls every 2s while the server is changing state.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button, Card, ErrorText, StatusBadge } from "../components/ui";
 import { api, TRANSITIONAL, type Server } from "../lib/api";
 
@@ -19,6 +19,7 @@ export function ServerDetailPage() {
     refetchInterval: (q) => (q.state.data && TRANSITIONAL.includes(q.state.data.server.status) ? 2_000 : false),
   });
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog, staleTime: 60_000 });
+  const volumes = useQuery({ queryKey: ["volumes"], queryFn: api.volumes });
 
   const onChanged = (data: { server: Server }) => {
     queryClient.setQueryData(["server", id], data);
@@ -109,6 +110,25 @@ export function ServerDetailPage() {
           <Detail label="Created" value={new Date(server.createdAt).toLocaleString()} />
           <Detail label="ID" value={server.id} mono />
         </dl>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-700">Attached volumes</h2>
+          <Link to="/volumes" className="text-sm text-indigo-600 hover:underline">
+            Manage volumes
+          </Link>
+        </div>
+        <ul className="mt-3 space-y-1 text-sm">
+          {volumes.data?.volumes.filter((v) => v.serverId === server.id).length === 0 && <li className="text-slate-500">None.</li>}
+          {volumes.data?.volumes
+            .filter((v) => v.serverId === server.id)
+            .map((v) => (
+              <li key={v.id}>
+                {v.name} — {v.sizeGb} GB <span className="text-slate-500">({v.status})</span>
+              </li>
+            ))}
+        </ul>
       </Card>
     </div>
   );
