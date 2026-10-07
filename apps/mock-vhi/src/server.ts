@@ -17,6 +17,9 @@
  *     assignment on it; servers are only visible inside their own project.
  *   - Nova/Cinder quotas (instances, cores, RAM, volumes, gigabytes) are
  *     enforced on create with Nova-style 403 "Quota exceeded" errors.
+ *   - Every project gets a Neutron-style "default" security group (egress
+ *     allowed, inbound only from the same group) on first use; rules can be
+ *     listed, added (duplicates -> 409) and deleted.
  *   - VMs sit in BUILD for `buildMs`, then become ACTIVE with a fixed IP.
  *   - Any server whose name contains "fail" ends in ERROR with a Nova-style fault.
  *   - start/stop/reboot/delete complete after `actionMs`; invalid state
@@ -72,6 +75,18 @@ interface Quotas {
   gigabytes: number;
 }
 
+interface SecurityGroupRule {
+  id: string;
+  security_group_id: string;
+  direction: "ingress" | "egress";
+  ethertype: "IPv4" | "IPv6";
+  protocol: string | null;
+  port_range_min: number | null;
+  port_range_max: number | null;
+  remote_ip_prefix: string | null;
+  remote_group_id: string | null;
+}
+
 interface TokenInfo {
   expiresAt: number;
   projectId: string;
@@ -124,7 +139,28 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
   const quotas = new Map<string, Quotas>();
   const servers = new Map<string, MockServer>();
   const consoleTokens = new Map<string, string>();
+  const securityGroups = new Map<string, { id: string; name: string; project_id: string }>();
+  const sgRules = new Map<string, SecurityGroupRule>();
   let nextIp = 10;
+
+  /** Neutron creates a project's default group lazily; so do we. */
+  const defaultGroup = (projectId: string) => {
+    const existing = [...securityGroups.values()].find((g) => g.project_id === projectId && g.name === "default");
+    if (existing) return existing;
+    const group = { id: randomUUID(), name: "default", project_id: projectId };
+    securityGroups.set(group.id, group);
+    const base = { security_group_id: group.id, protocol: null, port_range_min: null, port_range_max: null, remote_ip_prefix: null };
+    for (const ethertype of ["IPv4", "IPv6"] as const) {
+      sgRules.set(randomUUID(), { ...base, id: "", direction: "egress", ethertype, remote_group_id: null });
+      sgRules.set(randomUUID(), { ...base, id: "", direction: "ingress", ethertype, remote_group_id: group.id });
+    }
+    for (const [id, rule] of sgRules) if (!rule.id) rule.id = id;
+    return group;
+  };
+  const visibleGroup = (req: FastifyRequest, id: string) => {
+    const group = securityGroups.get(id);
+    return group && (group.project_id === scopeOf(req).projectId || isAdmin(req)) ? group : null;
+  };
 
   const app = Fastify({ logger: options.logger ?? false });
   app.decorateRequest("scope", null);
@@ -300,6 +336,62 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
     // Non-admin projects only see shared networks, like Neutron's default policy.
     networks: isAdmin(req) ? NETWORKS : NETWORKS.filter((n) => n.shared),
   }));
+
+  /* ---------------- Neutron security groups ---------------- */
+
+  app.get<{ Querystring: { name?: string; project_id?: string } }>("/network/v2.0/security-groups", async (req) => {
+    defaultGroup(scopeOf(req).projectId);
+    const groups = [...securityGroups.values()].filter(
+      (g) =>
+        (isAdmin(req) || g.project_id === scopeOf(req).projectId) &&
+        (!req.query.name || g.name === req.query.name) &&
+        (!req.query.project_id || g.project_id === req.query.project_id),
+    );
+    return { security_groups: groups.map((g) => ({ ...g, tenant_id: g.project_id })) };
+  });
+
+  app.get<{ Querystring: { security_group_id?: string } }>("/network/v2.0/security-group-rules", async (req) => {
+    const rules = [...sgRules.values()].filter(
+      (r) => visibleGroup(req, r.security_group_id) && (!req.query.security_group_id || r.security_group_id === req.query.security_group_id),
+    );
+    return { security_group_rules: rules };
+  });
+
+  app.post("/network/v2.0/security-group-rules", async (req, reply) => {
+    const body = (req.body as { security_group_rule?: Partial<SecurityGroupRule> }).security_group_rule ?? {};
+    if (!body.security_group_id || !visibleGroup(req, body.security_group_id)) {
+      return error(reply, 404, "NeutronError", `Security group ${body.security_group_id} does not exist`);
+    }
+    const rule: SecurityGroupRule = {
+      id: randomUUID(),
+      security_group_id: body.security_group_id,
+      direction: body.direction ?? "ingress",
+      ethertype: body.ethertype ?? "IPv4",
+      protocol: body.protocol ?? null,
+      port_range_min: body.port_range_min ?? null,
+      port_range_max: body.port_range_max ?? null,
+      remote_ip_prefix: body.remote_ip_prefix ?? null,
+      remote_group_id: body.remote_group_id ?? null,
+    };
+    const same = (a: SecurityGroupRule) =>
+      (["security_group_id", "direction", "ethertype", "protocol", "port_range_min", "port_range_max", "remote_ip_prefix", "remote_group_id"] as const).every(
+        (k) => a[k] === rule[k],
+      );
+    if ([...sgRules.values()].some(same)) {
+      return error(reply, 409, "NeutronError", "Security group rule already exists.");
+    }
+    sgRules.set(rule.id, rule);
+    return reply.code(201).send({ security_group_rule: rule });
+  });
+
+  app.delete<{ Params: { id: string } }>("/network/v2.0/security-group-rules/:id", async (req, reply) => {
+    const rule = sgRules.get(req.params.id);
+    if (!rule || !visibleGroup(req, rule.security_group_id)) {
+      return error(reply, 404, "NeutronError", `Security group rule ${req.params.id} could not be found.`);
+    }
+    sgRules.delete(rule.id);
+    return reply.code(204).send();
+  });
 
   /* ---------------- Nova / Cinder quotas (admin only) ---------------- */
 
@@ -482,6 +574,9 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
       quotas: quotasFor(p.id),
       serviceUserRoles: ROLES.filter((r) => assignments.has(`${p.id}:${SERVICE_USER_ID}:${r.id}`)).map((r) => r.name),
       servers: liveServers(p.id).length,
+      inboundRules: [...sgRules.values()]
+        .filter((r) => r.direction === "ingress" && !r.remote_group_id && securityGroups.get(r.security_group_id)?.project_id === p.id)
+        .map((r) => `${r.protocol ?? "any"}:${r.port_range_min ?? ""}-${r.port_range_max ?? ""}:${r.remote_ip_prefix}`),
     })),
   }));
 

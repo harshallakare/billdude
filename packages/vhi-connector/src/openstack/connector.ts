@@ -26,6 +26,7 @@ import type { VhiConnector, VhiProject } from "../connector.js";
 import { VhiConflictError, VhiError, VhiNotFoundError } from "../errors.js";
 import type {
   CreateServerInput,
+  FirewallRule,
   Flavor,
   Image,
   Network,
@@ -71,6 +72,17 @@ interface GlanceImage {
   status: string;
   min_disk?: number;
   min_ram?: number;
+}
+
+interface NeutronRule {
+  id: string;
+  direction: "ingress" | "egress";
+  ethertype: "IPv4" | "IPv6";
+  protocol: string | null;
+  port_range_min: number | null;
+  port_range_max: number | null;
+  remote_ip_prefix: string | null;
+  remote_group_id: string | null;
 }
 
 interface NeutronNetwork {
@@ -148,7 +160,7 @@ export class OpenStackVhiConnector implements VhiConnector {
   project(projectId: string): VhiProject {
     let project = this.projects.get(projectId);
     if (!project) {
-      project = new OpenStackVhiProject(new OpenStackClient(this.options, { projectId }), this.options);
+      project = new OpenStackVhiProject(projectId, new OpenStackClient(this.options, { projectId }), this.options);
       this.projects.set(projectId, project);
     }
     return project;
@@ -199,6 +211,7 @@ export class OpenStackVhiConnector implements VhiConnector {
 /** Server operations inside one customer project. */
 class OpenStackVhiProject implements VhiProject {
   constructor(
+    private readonly projectId: string,
     private readonly client: OpenStackClient,
     private readonly options: VhiConnectorOptions,
   ) {}
@@ -289,6 +302,94 @@ class OpenStackVhiProject implements VhiProject {
     );
     return body.remote_console.url;
   }
+
+  async syncFirewall(rules: FirewallRule[]): Promise<{ added: number; removed: number }> {
+    const groupId = await this.defaultSecurityGroupId();
+    const body = await this.client.request<{ security_group_rules: NeutronRule[] }>(
+      "network",
+      "GET",
+      `/v2.0/security-group-rules?security_group_id=${encodeURIComponent(groupId)}`,
+    );
+    // Only plain inbound CIDR rules are ours; egress and the same-group rule stay untouched.
+    const existing = new Map(
+      body.security_group_rules
+        .filter((r) => r.direction === "ingress" && !r.remote_group_id)
+        .map((r) => [ruleKey(fromNeutronRule(r)), r]),
+    );
+    const desired = new Map(rules.map((r) => normalizeRule(r)).map((r) => [ruleKey(r), r]));
+
+    let removed = 0;
+    for (const [key, rule] of existing) {
+      if (desired.has(key)) continue;
+      try {
+        await this.client.request("network", "DELETE", `/v2.0/security-group-rules/${encodeURIComponent(rule.id)}`);
+      } catch (error) {
+        if (!(error instanceof VhiNotFoundError)) throw error;
+      }
+      removed++;
+    }
+
+    let added = 0;
+    for (const [key, rule] of desired) {
+      if (existing.has(key)) continue;
+      try {
+        await this.client.request("network", "POST", "/v2.0/security-group-rules", {
+          body: {
+            security_group_rule: {
+              security_group_id: groupId,
+              direction: "ingress",
+              ethertype: rule.cidr.includes(":") ? "IPv6" : "IPv4",
+              protocol: rule.protocol === "any" ? null : rule.protocol,
+              port_range_min: rule.portMin,
+              port_range_max: rule.portMax,
+              remote_ip_prefix: rule.cidr,
+            },
+          },
+        });
+      } catch (error) {
+        // Already present (e.g. created by a concurrent sync).
+        if (!(error instanceof VhiConflictError)) throw error;
+      }
+      added++;
+    }
+    return { added, removed };
+  }
+
+  private async defaultSecurityGroupId(): Promise<string> {
+    const body = await this.client.request<{ security_groups: { id: string; project_id?: string; tenant_id?: string }[] }>(
+      "network",
+      "GET",
+      `/v2.0/security-groups?name=default&project_id=${encodeURIComponent(this.projectId)}`,
+    );
+    const group = body.security_groups.find((g) => (g.project_id ?? g.tenant_id) === this.projectId);
+    if (!group) throw new VhiError(`Project ${this.projectId} has no default security group`, 404, true);
+    return group.id;
+  }
+}
+
+/** Canonical form: ports only for tcp/udp, single ports expanded to a range, CIDR lower-cased. */
+function normalizeRule(rule: FirewallRule): FirewallRule {
+  const ported = rule.protocol === "tcp" || rule.protocol === "udp";
+  return {
+    protocol: rule.protocol,
+    portMin: ported ? rule.portMin : null,
+    portMax: ported ? (rule.portMax ?? rule.portMin) : null,
+    cidr: rule.cidr.trim().toLowerCase(),
+  };
+}
+
+function fromNeutronRule(r: NeutronRule): FirewallRule {
+  const protocol = r.protocol === "tcp" || r.protocol === "udp" || r.protocol === "icmp" ? r.protocol : "any";
+  return normalizeRule({
+    protocol,
+    portMin: r.port_range_min,
+    portMax: r.port_range_max,
+    cidr: r.remote_ip_prefix ?? (r.ethertype === "IPv6" ? "::/0" : "0.0.0.0/0"),
+  });
+}
+
+function ruleKey(r: FirewallRule): string {
+  return `${r.protocol}|${r.portMin ?? ""}|${r.portMax ?? ""}|${r.cidr}`;
 }
 
 function toServer(s: NovaServer): Server {

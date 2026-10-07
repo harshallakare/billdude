@@ -19,6 +19,7 @@ import type {
   Flavor,
   Image,
   Network,
+  FirewallRule,
   PowerAction,
   ProjectQuotas,
   Server,
@@ -52,4 +53,11 @@ export interface VhiProject {
   deleteServer(id: string): Promise<void>;
   /** Short-lived noVNC URL for the server's console. */
   getConsoleUrl(id: string): Promise<string>;
+
+  /**
+   * Makes the inbound rules of the project's "default" security group (which
+   * every server gets) exactly match `rules`. Outbound rules and the built-in
+   * same-group rule are left alone. Idempotent; returns what changed.
+   */
+  syncFirewall(rules: FirewallRule[]): Promise<{ added: number; removed: number }>;
 }

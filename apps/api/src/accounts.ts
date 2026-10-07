@@ -6,8 +6,9 @@
  * because it calls the cloud).
  *
  *   const accounts = createAccountService({ db, vhi, config });
- *   const projectId = await accounts.ensureProject(userId);   // idempotent
+ *   const projectId = await accounts.ensureProject(userId);   // idempotent; applies quotas + firewall on creation
  *   await accounts.syncQuotas(userId);                         // push quotas to VHI
+ *   await accounts.syncFirewall(userId);                       // push firewall rules to VHI
  *
  * Usage accounting for the portal-side quota check lives in computeUsage().
  */
@@ -15,7 +16,8 @@ import type { Flavor, ProjectQuotas, VhiConnector } from "@billdude/vhi-connecto
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { defaultQuotas, type Config } from "./config.js";
 import type { Db } from "./db/client.js";
-import { servers, users, type User } from "./db/schema.js";
+import { firewallRules, servers, users, type User } from "./db/schema.js";
+import { toConnectorRules } from "./firewall.js";
 
 export interface AccountDeps {
   db: Db;
@@ -28,6 +30,10 @@ export function effectiveQuotas(user: Pick<User, "quotas">, config: Config): Pro
 }
 
 export function createAccountService({ db, vhi, config }: AccountDeps) {
+  async function loadFirewall(userId: string) {
+    return toConnectorRules(await db.select().from(firewallRules).where(eq(firewallRules.userId, userId)));
+  }
+
   async function load(userId: string): Promise<User> {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) throw new Error(`User ${userId} not found`);
@@ -44,6 +50,7 @@ export function createAccountService({ db, vhi, config }: AccountDeps) {
         description: `billdude customer ${user.email}`,
       });
       await vhi.setProjectQuotas(id, effectiveQuotas(user, config));
+      await vhi.project(id).syncFirewall(await loadFirewall(user.id));
       // Only the first writer wins; ensureProject() is idempotent so a racing job got the same id.
       await db.update(users).set({ vhiProjectId: id }).where(and(eq(users.id, userId), isNull(users.vhiProjectId)));
       return id;
@@ -54,6 +61,13 @@ export function createAccountService({ db, vhi, config }: AccountDeps) {
       const user = await load(userId);
       if (!user.vhiProjectId) return;
       await vhi.setProjectQuotas(user.vhiProjectId, effectiveQuotas(user, config));
+    },
+
+    /** Pushes the customer's firewall rules to VHI. A no-op until their project exists. */
+    async syncFirewall(userId: string): Promise<void> {
+      const user = await load(userId);
+      if (!user.vhiProjectId) return;
+      await vhi.project(user.vhiProjectId).syncFirewall(await loadFirewall(user.id));
     },
   };
 }

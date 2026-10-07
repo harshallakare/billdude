@@ -31,6 +31,9 @@ export function Layout() {
             <NavLink to="/ssh-keys" className={navClass}>
               SSH keys
             </NavLink>
+            <NavLink to="/firewall" className={navClass}>
+              Firewall
+            </NavLink>
             <NavLink to="/billing" className={navClass}>
               Billing
             </NavLink>

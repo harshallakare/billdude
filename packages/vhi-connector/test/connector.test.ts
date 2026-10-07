@@ -102,6 +102,34 @@ describe("projects", () => {
   });
 });
 
+describe("firewall", () => {
+  it("makes the default security group's inbound rules match exactly, idempotently", async () => {
+    const { id: projectId } = await vhi.ensureProject({ name: "billdude-fw" });
+    const fw = vhi.project(projectId);
+    const inbound = async () => {
+      const { projects } = (await mock.inject({ method: "GET", url: "/_mock/projects" })).json() as {
+        projects: { id: string; inboundRules: string[] }[];
+      };
+      return projects.find((p) => p.id === projectId)!.inboundRules.sort();
+    };
+
+    expect(await inbound()).toEqual([]);
+    const ssh = { protocol: "tcp" as const, portMin: 22, portMax: 22, cidr: "0.0.0.0/0" };
+    const ping = { protocol: "icmp" as const, portMin: null, portMax: null, cidr: "0.0.0.0/0" };
+    expect(await fw.syncFirewall([ssh, ping])).toEqual({ added: 2, removed: 0 });
+    expect(await inbound()).toEqual(["icmp:-:0.0.0.0/0", "tcp:22-22:0.0.0.0/0"]);
+    expect(await fw.syncFirewall([ssh, ping])).toEqual({ added: 0, removed: 0 });
+
+    const web = { protocol: "tcp" as const, portMin: 443, portMax: null, cidr: "0.0.0.0/0" };
+    expect(await fw.syncFirewall([ssh, web])).toEqual({ added: 1, removed: 1 });
+    expect(await inbound()).toEqual(["tcp:22-22:0.0.0.0/0", "tcp:443-443:0.0.0.0/0"]);
+
+    // Other projects are unaffected.
+    const { id: otherId } = await vhi.ensureProject({ name: "billdude-fw-2" });
+    expect(await vhi.project(otherId).syncFirewall([])).toEqual({ added: 0, removed: 0 });
+  });
+});
+
 describe("server lifecycle", () => {
   it("creates, stops, starts, reboots and deletes a server", async () => {
     const { id } = await project.createServer({

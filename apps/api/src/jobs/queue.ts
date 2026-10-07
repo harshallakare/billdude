@@ -28,8 +28,8 @@ export interface VmJobData {
 
 export interface AccountJobData {
   userId: string;
-  /** provision: create the customer's VHI project. sync-quotas: push quota changes. */
-  op: "provision" | "sync-quotas";
+  /** provision: create the customer's VHI project. sync-*: push quota or firewall changes. */
+  op: "provision" | "sync-quotas" | "sync-firewall";
 }
 
 export interface BillingJobData {

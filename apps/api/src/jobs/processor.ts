@@ -168,7 +168,8 @@ export function createProcessors(deps: ProcessorDeps) {
   async function processAccountJob(job: AccountJobData): Promise<void> {
     try {
       if (job.op === "provision") await accounts.ensureProject(job.userId);
-      else await accounts.syncQuotas(job.userId);
+      else if (job.op === "sync-quotas") await accounts.syncQuotas(job.userId);
+      else await accounts.syncFirewall(job.userId);
     } catch (error) {
       classify(error);
     }

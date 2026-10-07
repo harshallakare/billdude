@@ -222,6 +222,26 @@ export const ticketMessages = pgTable(
   (t) => [index("ticket_messages_ticket_idx").on(t.ticketId, t.createdAt)],
 );
 
+export const firewallProtocol = pgEnum("firewall_protocol", ["tcp", "udp", "icmp", "any"]);
+
+/** Inbound rules for the customer's VHI project (applied to its default security group). */
+export const firewallRules = pgTable(
+  "firewall_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    protocol: firewallProtocol("protocol").notNull(),
+    portMin: integer("port_min"),
+    portMax: integer("port_max"),
+    cidr: text("cidr").notNull(),
+    description: text("description").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("firewall_rules_user_idx").on(t.userId)],
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {
@@ -239,6 +259,7 @@ export const auditLogs = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type SshKey = typeof sshKeys.$inferSelect;
+export type FirewallRuleRow = typeof firewallRules.$inferSelect;
 export type WalletTransaction = typeof walletTransactions.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
 export type ServerRow = typeof servers.$inferSelect;

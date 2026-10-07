@@ -14,7 +14,8 @@ import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
 import { DUMMY_HASH, hashPassword, verifyPassword } from "../auth/password.js";
-import { users } from "../db/schema.js";
+import { firewallRules, users } from "../db/schema.js";
+import { DEFAULT_FIREWALL_RULES } from "../firewall.js";
 import { postTransaction } from "../billing/ledger.js";
 import { parseAmount } from "../billing/money.js";
 import { enqueueAccountOp } from "../jobs/queue.js";
@@ -52,6 +53,7 @@ export async function authRoutes(app: FastifyInstance, { db, queues, config }: A
         reference: `signup:${user!.id}`,
       });
     }
+    await db.insert(firewallRules).values(DEFAULT_FIREWALL_RULES.map((r) => ({ ...r, userId: user!.id })));
     // Create the customer's VHI project in the background so their first server starts faster.
     await enqueueAccountOp(queues.account, { userId: user!.id, op: "provision" });
     await reply.startSession(user!.id);

@@ -30,6 +30,9 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
   `<VHI_PROJECT_PREFIX><user id>`, grants the service user `VHI_MEMBER_ROLE`, applies quotas
   and stores `users.vhi_project_id`. Servers record `vhi_project_id` too; always go through
   `vhi.project(id)` for server calls. Registration enqueues an `account-ops` provision job.
+- **Firewall = desired state.** `firewall_rules` rows are the truth; `VhiProject.syncFirewall`
+  makes the default security group's inbound CIDR rules match exactly (never touching egress
+  or the same-group rule). Any rule change enqueues an `account-ops` `sync-firewall` job.
 - **Quotas are enforced twice**: a friendly portal check (`exceededQuota` in `accounts.ts`)
   and VHI's own Nova/Cinder quotas (`VhiQuotaError` → job fails with a clear message).
 - **Money is integer micro-units** (`balance_micros`, 1 INR = 1_000_000) — see
@@ -86,7 +89,9 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 - [x] Phase 0 — monorepo, auth/roles, DB, queue/worker, CI, mock VHI
 - [x] Phase 1 (core) — VHI connector: catalog, VM create/start/stop/reboot/delete, noVNC console
 - [x] Phase 1 — SSH keys via cloud-init; per-customer VHI projects + quotas; network allow-list
-- [ ] Phase 1 (rest) — volumes, floating IPs, security groups, snapshots; test against a real VHI cluster
+- [x] Phase 1 — firewall: per-customer inbound rules reconciled onto the project's default
+      security group (new projects block inbound traffic by default; SSH + ping seeded)
+- [ ] Phase 1 (rest) — extra volumes, snapshots/backups, floating IPs; test against a real VHI cluster
 - [ ] Phase 2 — portal polish: dashboard, SSH key manager, embedded noVNC
 - [x] Phase 3 (core) — pricing (formula + per-flavor overrides), per-second metering, prepaid
       wallet + ledger, Razorpay top-ups + webhook, monthly statements, non-payment stop

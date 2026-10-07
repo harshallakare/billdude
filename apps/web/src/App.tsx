@@ -7,6 +7,7 @@
  *   /servers/new               create wizard
  *   /servers/:id               detail + power actions + console
  *   /ssh-keys                  SSH key manager
+ *   /firewall                  inbound firewall rules
  *   /billing                   wallet, top-ups, transactions
  *   /billing/statements/:month monthly usage statement
  *   /support, /support/:id     support tickets
@@ -25,6 +26,7 @@ import { AdminPricingPage } from "./pages/admin/Pricing";
 import { AdminTicketsPage } from "./pages/admin/Tickets";
 import { BillingPage } from "./pages/Billing";
 import { CreateServerPage } from "./pages/CreateServer";
+import { FirewallPage } from "./pages/Firewall";
 import { LoginPage } from "./pages/Login";
 import { RegisterPage } from "./pages/Register";
 import { ServerDetailPage } from "./pages/ServerDetail";
@@ -58,6 +60,7 @@ export function App() {
         <Route path="/servers/new" element={<CreateServerPage />} />
         <Route path="/servers/:id" element={<ServerDetailPage />} />
         <Route path="/ssh-keys" element={<SshKeysPage />} />
+        <Route path="/firewall" element={<FirewallPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/billing/statements/:month" element={<StatementPage />} />
         <Route path="/support" element={<SupportPage />} />

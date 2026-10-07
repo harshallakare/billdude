@@ -89,3 +89,17 @@ export interface ProjectQuotas {
   volumes: number;
   gigabytes: number;
 }
+
+/** An inbound firewall (security group) rule. Ports are ignored for "icmp" and "any". */
+export interface FirewallRule {
+  protocol: "tcp" | "udp" | "icmp" | "any";
+  portMin: number | null;
+  portMax: number | null;
+  /** Source network in CIDR form, e.g. "0.0.0.0/0" or "203.0.113.0/24" (IPv6 allowed). */
+  cidr: string;
+}
+
+/** A rule as it exists on the cloud, with its provider id. */
+export interface AppliedFirewallRule extends FirewallRule {
+  id: string;
+}

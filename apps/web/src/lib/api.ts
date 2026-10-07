@@ -199,6 +199,16 @@ export interface AuditEntry {
   createdAt: string;
 }
 
+export interface FirewallRule {
+  id: string;
+  protocol: "tcp" | "udp" | "icmp" | "any";
+  portMin: number | null;
+  portMax: number | null;
+  cidr: string;
+  description: string;
+  createdAt: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -277,6 +287,10 @@ export const api = {
       ),
     audit: () => request<{ entries: AuditEntry[] }>("GET", "/admin/audit?limit=200"),
   },
+
+  firewall: () => request<{ rules: FirewallRule[] }>("GET", "/firewall"),
+  addFirewallRule: (rule: Omit<FirewallRule, "id" | "createdAt">) => request<{ rule: FirewallRule }>("POST", "/firewall", rule),
+  deleteFirewallRule: (id: string) => request<{ ok: true }>("DELETE", `/firewall/${id}`),
 
   listSshKeys: () => request<{ sshKeys: SshKey[] }>("GET", "/ssh-keys"),
   addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),

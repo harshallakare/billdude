@@ -26,6 +26,7 @@ import { accountRoutes } from "./routes/account.js";
 import { adminBillingRoutes } from "./routes/admin-billing.js";
 import { adminRoutes } from "./routes/admin.js";
 import { billingRoutes } from "./routes/billing.js";
+import { firewallRoutes } from "./routes/firewall.js";
 import { authRoutes } from "./routes/auth.js";
 import { catalogRoutes } from "./routes/catalog.js";
 import { healthRoutes } from "./routes/health.js";
@@ -86,6 +87,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await accountRoutes(api, deps);
       await billingRoutes(api, deps);
       await ticketRoutes(api, deps);
+      await firewallRoutes(api, deps);
       await adminRoutes(api, deps);
       await adminBillingRoutes(api, deps);
     },
