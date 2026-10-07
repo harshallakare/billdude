@@ -1,35 +1,44 @@
 /**
  * apps/api/src/jobs/worker.ts
  *
- * Usage: wires the VM processor to a BullMQ worker.
+ * Usage: wires the job processors to BullMQ workers (one per queue).
  *
- *   const worker = createVmWorker({ db, vhi, connection: redis });
+ *   const workers = createWorkers({ db, vhi, accounts, connection: redis });
  *   ...
- *   await worker.close();     // graceful shutdown
+ *   await workers.close();     // graceful shutdown
  *
  * Started in production by src/worker-main.ts; tests start it in-process.
  */
 import { Worker } from "bullmq";
 import type { Redis } from "ioredis";
-import { createVmProcessor, markJobFailed, type ProcessorDeps } from "./processor.js";
-import { VM_QUEUE, type VmJobData } from "./queue.js";
+import { createProcessors, markJobFailed, type ProcessorDeps } from "./processor.js";
+import { ACCOUNT_QUEUE, VM_QUEUE, type AccountJobData, type VmJobData } from "./queue.js";
 
-export function createVmWorker(
-  deps: ProcessorDeps & { connection: Redis; prefix?: string; concurrency?: number },
-): Worker<VmJobData> {
-  const process = createVmProcessor(deps);
-  const worker = new Worker<VmJobData>(VM_QUEUE, (job) => process(job.data), {
-    connection: deps.connection,
+export function createWorkers(deps: ProcessorDeps & { connection: Redis; prefix?: string; concurrency?: number }) {
+  const { processVmJob, processAccountJob } = createProcessors(deps);
+  const common = { connection: deps.connection, ...(deps.prefix ? { prefix: deps.prefix } : {}) };
+
+  const vm = new Worker<VmJobData>(VM_QUEUE, (job) => processVmJob(job.data), {
+    ...common,
     concurrency: deps.concurrency ?? 10,
-    ...(deps.prefix ? { prefix: deps.prefix } : {}),
   });
-
-  worker.on("failed", (job, error) => {
+  vm.on("failed", (job, error) => {
     if (!job) return;
     const attempts = job.opts.attempts ?? 1;
     const finalFailure = error.name === "UnrecoverableError" || job.attemptsMade >= attempts;
     if (finalFailure) void markJobFailed(deps.db, job.data, error.message);
   });
 
-  return worker;
+  const account = new Worker<AccountJobData>(ACCOUNT_QUEUE, (job) => processAccountJob(job.data), {
+    ...common,
+    concurrency: 5,
+  });
+
+  return {
+    vm,
+    account,
+    async close() {
+      await Promise.all([vm.close(), account.close()]);
+    },
+  };
 }

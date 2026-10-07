@@ -4,7 +4,7 @@
  * Usage: builds the Fastify application from explicit dependencies, so the
  * same function serves production (src/main.ts) and tests:
  *
- *   const app = await buildApp({ config, db, redis, queue, vhi, catalog });
+ *   const app = await buildApp({ config, db, redis, queues, vhi, catalog });
  *   await app.listen({ port: config.API_PORT });
  *   // tests: await app.inject({ method: "GET", url: "/api/health" })
  *
@@ -12,15 +12,16 @@
  */
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
-import { VhiError, type VhiConnector } from "@billdude/vhi-connector";
+import { VhiError, VhiQuotaError, type VhiConnector } from "@billdude/vhi-connector";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
 import { ZodError } from "zod";
 import type { Catalog } from "./catalog.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db/client.js";
-import type { VmQueue } from "./jobs/queue.js";
+import type { Queues } from "./jobs/queue.js";
 import { authPlugin } from "./plugins/auth.js";
+import { accountRoutes } from "./routes/account.js";
 import { adminRoutes } from "./routes/admin.js";
 import { authRoutes } from "./routes/auth.js";
 import { catalogRoutes } from "./routes/catalog.js";
@@ -32,7 +33,7 @@ export interface AppDeps {
   config: Config;
   db: Db;
   redis: Redis;
-  queue: VmQueue;
+  queues: Queues;
   vhi: VhiConnector;
   catalog: Catalog;
 }
@@ -55,6 +56,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (error instanceof ZodError) {
       return reply.code(400).send({ error: "Invalid request", issues: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) });
     }
+    if (error instanceof VhiQuotaError) {
+      return reply.code(403).send({ error: "Your resource quota does not allow this." });
+    }
     if (error instanceof VhiError) {
       req.log.error({ err: error }, "VHI call failed");
       return reply.code(502).send({ error: "The cloud platform is unavailable. Please try again shortly." });
@@ -74,6 +78,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await catalogRoutes(api, deps);
       await serverRoutes(api, deps);
       await sshKeyRoutes(api, deps);
+      await accountRoutes(api, deps);
       await adminRoutes(api, deps);
     },
     { prefix: "/api" },

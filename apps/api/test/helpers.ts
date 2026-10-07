@@ -2,10 +2,10 @@
  * apps/api/test/helpers.ts
  *
  * Usage: spins up a complete, isolated test stack for API integration tests:
- * a fresh database schema, the mock VHI server, the Fastify app and an
- * in-process worker on a unique Redis key prefix.
+ * a fresh database schema, the mock VHI server, the Fastify app and
+ * in-process workers on a unique Redis key prefix.
  *
- *   const stack = await startStack();
+ *   const stack = await startStack();                       // or startStack({ QUOTA_INSTANCES: "1" })
  *   const agent = await stack.signUp("alice@example.com");
  *   await agent.post("/api/servers", {...});
  *   await stack.stop();
@@ -26,15 +26,16 @@ import { loadConfig, vhiOptions } from "../src/config.js";
 import { createDb } from "../src/db/client.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { users } from "../src/db/schema.js";
-import { createVmQueue } from "../src/jobs/queue.js";
-import { createVmWorker } from "../src/jobs/worker.js";
+import { createAccountService } from "../src/accounts.js";
+import { createQueues } from "../src/jobs/queue.js";
+import { createWorkers } from "../src/jobs/worker.js";
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/billdude_test";
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
 export type Stack = Awaited<ReturnType<typeof startStack>>;
 
-export async function startStack() {
+export async function startStack(env: Record<string, string> = {}) {
   // Fresh schema for every test file.
   const reset = createDb(DATABASE_URL);
   await reset.db.execute(sql`drop schema if exists public cascade; drop schema if exists drizzle cascade; create schema public;`);
@@ -54,25 +55,28 @@ export async function startStack() {
     VHI_USERNAME: "admin",
     VHI_PASSWORD: "admin",
     VHI_PROJECT_NAME: "billdude",
+    ...env,
   });
 
   const { db, pool } = createDb(DATABASE_URL);
   const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
   const prefix = `bdtest-${randomUUID()}`;
-  const queue = createVmQueue(redis, prefix);
+  const queues = createQueues(redis, prefix);
   const vhi = createVhiConnector(vhiOptions(config));
-  const catalog = createCatalog(vhi);
-  const app = await buildApp({ config, db, redis, queue, vhi, catalog });
-  const worker = createVmWorker({ db, vhi, connection: redis, prefix, pollMs: 10, concurrency: 5 });
+  const catalog = createCatalog(vhi, { allowedNetworkIds: config.VHI_ALLOWED_NETWORK_IDS });
+  const accounts = createAccountService({ db, vhi, config });
+  const app = await buildApp({ config, db, redis, queues, vhi, catalog });
+  const workers = createWorkers({ db, vhi, accounts, connection: redis, prefix, pollMs: 10, concurrency: 5 });
 
   const agentFor = (cookie: string) => {
-    const call = async (method: "GET" | "POST" | "PATCH" | "DELETE", url: string, payload?: unknown) => {
+    const call = async (method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", url: string, payload?: unknown) => {
       const res = await app.inject({ method, url, payload: payload as object, headers: { cookie } });
       return { status: res.statusCode, body: res.body ? res.json() : undefined };
     };
     return {
       get: (url: string) => call("GET", url),
       post: (url: string, payload?: unknown) => call("POST", url, payload ?? {}),
+      put: (url: string, payload?: unknown) => call("PUT", url, payload),
       patch: (url: string, payload?: unknown) => call("PATCH", url, payload),
       delete: (url: string) => call("DELETE", url),
     };
@@ -89,6 +93,8 @@ export async function startStack() {
     app,
     db,
     vhi,
+    accounts,
+    config,
     mock,
     anonymous: agentFor(""),
     async signUp(email: string, password = "correct-horse-battery") {
@@ -105,9 +111,11 @@ export async function startStack() {
       return u!.id;
     },
     async stop() {
-      await worker.close();
-      await queue.obliterate({ force: true });
-      await queue.close();
+      await workers.close();
+      for (const queue of [queues.vm, queues.account]) {
+        await queue.obliterate({ force: true });
+        await queue.close();
+      }
       await app.close();
       redis.disconnect();
       await pool.end();

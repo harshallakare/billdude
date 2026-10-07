@@ -80,3 +80,12 @@ export interface CreateServerInput {
 }
 
 export type PowerAction = "start" | "stop" | "reboot" | "hard-reboot";
+
+/** Per-project resource limits. -1 means unlimited. */
+export interface ProjectQuotas {
+  instances: number;
+  cores: number;
+  ramMb: number;
+  volumes: number;
+  gigabytes: number;
+}

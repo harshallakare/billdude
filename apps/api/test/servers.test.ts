@@ -7,7 +7,7 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { servers } from "../src/db/schema.js";
-import { createVmProcessor, SERVER_TAG } from "../src/jobs/processor.js";
+import { createProcessors, SERVER_TAG } from "../src/jobs/processor.js";
 import { eventually, startStack, VALID_SERVER, type Stack } from "./helpers.js";
 
 let stack: Stack;
@@ -64,7 +64,7 @@ describe("servers", () => {
     );
     const [row] = await stack.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.status).toBe("deleted");
-    expect(await stack.vhi.getServer(row!.vhiServerId!)).toBeNull();
+    expect(await stack.vhi.project(row!.vhiProjectId!).getServer(row!.vhiServerId!)).toBeNull();
   });
 
   it("shows the provider fault when VHI fails the build", async () => {
@@ -100,18 +100,20 @@ describe("servers", () => {
     const gina = await stack.signUp("gina@example.com");
     const ownerId = await stack.userId("gina@example.com");
     // Simulate a crash after createServer() but before the id was saved.
+    const projectId = await stack.accounts.ensureProject(ownerId);
     const [row] = await stack.db
       .insert(servers)
-      .values({ ...VALID_SERVER, name: "crashy", ownerId })
+      .values({ ...VALID_SERVER, name: "crashy", ownerId, vhiProjectId: projectId })
       .returning();
-    const { id: vmId } = await stack.vhi.createServer({ ...VALID_SERVER, name: "crashy", metadata: { [SERVER_TAG]: row!.id } });
+    const project = stack.vhi.project(projectId);
+    const { id: vmId } = await project.createServer({ ...VALID_SERVER, name: "crashy", metadata: { [SERVER_TAG]: row!.id } });
 
-    const process = createVmProcessor({ db: stack.db, vhi: stack.vhi, pollMs: 10 });
-    await process({ serverId: row!.id, op: "create", actorId: null });
+    const { processVmJob } = createProcessors({ db: stack.db, vhi: stack.vhi, accounts: stack.accounts, pollMs: 10 });
+    await processVmJob({ serverId: row!.id, op: "create", actorId: null });
 
     const [after] = await stack.db.select().from(servers).where(eq(servers.id, row!.id));
     expect(after).toMatchObject({ vhiServerId: vmId, status: "active" });
-    const tagged = await stack.vhi.listServers({ metadata: { [SERVER_TAG]: row!.id } });
+    const tagged = await project.listServers({ metadata: { [SERVER_TAG]: row!.id } });
     expect(tagged).toHaveLength(1);
     expect((await gina.get(`/api/servers/${row!.id}`)).body.server.status).toBe("active");
   });

@@ -77,6 +77,14 @@ export interface SshKey {
   createdAt: string;
 }
 
+export interface Quotas {
+  instances: number;
+  cores: number;
+  ramMb: number;
+  volumes: number;
+  gigabytes: number;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -117,6 +125,8 @@ export const api = {
     request<{ server: Server }>("POST", `/servers/${id}/actions`, { action }),
   deleteServer: (id: string) => request<{ server: Server }>("DELETE", `/servers/${id}`),
   consoleUrl: (id: string) => request<{ url: string }>("GET", `/servers/${id}/console`),
+
+  quotas: () => request<{ limits: Quotas; usage: Quotas }>("GET", "/account/quotas"),
 
   listSshKeys: () => request<{ sshKeys: SshKey[] }>("GET", "/ssh-keys"),
   addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),

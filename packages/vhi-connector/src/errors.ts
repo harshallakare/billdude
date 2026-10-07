@@ -42,6 +42,14 @@ export class VhiConflictError extends VhiError {
   }
 }
 
+/** The project's quota (instances, cores, RAM, disk…) would be exceeded. */
+export class VhiQuotaError extends VhiError {
+  constructor(message: string, status = 403) {
+    super(message, status, false);
+    this.name = "VhiQuotaError";
+  }
+}
+
 export function isRetryable(error: unknown): boolean {
   return error instanceof VhiError && error.retryable;
 }

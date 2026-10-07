@@ -25,6 +25,21 @@ const schema = z.object({
   VHI_PROJECT_DOMAIN: z.string().default("Default"),
   VHI_REGION: z.string().optional().transform((v) => v || undefined),
   VHI_VOLUME_TYPE: z.string().optional().transform((v) => v || undefined),
+  /** Keystone role the service account grants itself on customer projects. */
+  VHI_MEMBER_ROLE: z.string().default("member"),
+  /** Customer projects are named <prefix><account id>. */
+  VHI_PROJECT_PREFIX: z.string().default("billdude-"),
+  /** Comma-separated network ids customers may attach to. Empty = every shared network. */
+  VHI_ALLOWED_NETWORK_IDS: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean)),
+  /** Default per-customer quotas (admins can override per customer). -1 = unlimited. */
+  QUOTA_INSTANCES: z.coerce.number().int().min(-1).default(5),
+  QUOTA_CORES: z.coerce.number().int().min(-1).default(10),
+  QUOTA_RAM_MB: z.coerce.number().int().min(-1).default(20480),
+  QUOTA_VOLUMES: z.coerce.number().int().min(-1).default(10),
+  QUOTA_GIGABYTES: z.coerce.number().int().min(-1).default(500),
 });
 
 export type Config = z.infer<typeof schema>;
@@ -49,5 +64,17 @@ export function vhiOptions(config: Config) {
     projectDomain: config.VHI_PROJECT_DOMAIN,
     region: config.VHI_REGION,
     volumeType: config.VHI_VOLUME_TYPE,
+    memberRole: config.VHI_MEMBER_ROLE,
+  };
+}
+
+/** Quotas applied to customers without an admin override. */
+export function defaultQuotas(config: Config) {
+  return {
+    instances: config.QUOTA_INSTANCES,
+    cores: config.QUOTA_CORES,
+    ramMb: config.QUOTA_RAM_MB,
+    volumes: config.QUOTA_VOLUMES,
+    gigabytes: config.QUOTA_GIGABYTES,
   };
 }

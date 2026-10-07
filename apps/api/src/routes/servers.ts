@@ -13,16 +13,14 @@
  * transitional status with a guarded UPDATE (so two clicks cannot race), and
  * enqueues a job for the worker.
  */
-import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
-import { servers, sshKeys, type ServerRow, type ServerStatusValue } from "../db/schema.js";
+import { computeUsage, effectiveQuotas, exceededQuota } from "../accounts.js";
+import { servers, sshKeys, users, type ServerRow, type ServerStatusValue } from "../db/schema.js";
 import { enqueueVmOp } from "../jobs/queue.js";
-
-/** Soft limit until per-plan quotas arrive with billing. */
-export const MAX_SERVERS_PER_CUSTOMER = 10;
 
 const createBody = z.object({
   name: z
@@ -37,6 +35,14 @@ const createBody = z.object({
 });
 
 const idParams = z.object({ id: z.string().uuid() });
+
+export const QUOTA_LABELS = {
+  instances: "server",
+  cores: "vCPU",
+  ramMb: "RAM (MB)",
+  volumes: "volume",
+  gigabytes: "disk (GB)",
+} as const;
 const actionBody = z.object({ action: z.enum(["start", "stop", "reboot"]) });
 
 /** Which statuses each action may start from, and the transitional status it moves to. */
@@ -47,7 +53,7 @@ const TRANSITIONS: Record<"start" | "stop" | "reboot" | "delete", { from: Server
   delete: { from: ["active", "stopped", "error"], to: "deleting" },
 };
 
-export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, vhi }: AppDeps) {
+export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, vhi, config }: AppDeps) {
   /** Loads a server the caller may act on (owner, or any admin). */
   async function loadOwned(req: FastifyRequest): Promise<ServerRow | null> {
     const { id } = idParams.parse(req.params);
@@ -81,12 +87,20 @@ export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, v
       return reply.code(400).send({ error: `This image needs a disk of at least ${image.minDiskGb} GB` });
     }
 
-    const [{ value: owned } = { value: 0 }] = await db
-      .select({ value: count() })
-      .from(servers)
-      .where(and(eq(servers.ownerId, req.user.id), ne(servers.status, "deleted")));
-    if (owned >= MAX_SERVERS_PER_CUSTOMER) {
-      return reply.code(403).send({ error: `You can have at most ${MAX_SERVERS_PER_CUSTOMER} servers` });
+    // Fast, friendly quota check; VHI enforces the same limits authoritatively.
+    const flavor = flavors.find((f) => f.id === body.flavorId)!;
+    const [owner] = await db.select().from(users).where(eq(users.id, req.user.id));
+    const over = exceededQuota(effectiveQuotas(owner!, config), await computeUsage(db, flavors, req.user.id), {
+      instances: 1,
+      cores: flavor.vcpus,
+      ramMb: flavor.ramMb,
+      volumes: 1,
+      gigabytes: body.bootVolumeGb,
+    });
+    if (over) {
+      return reply.code(403).send({
+        error: `This would exceed your ${QUOTA_LABELS[over.resource]} quota (${over.used} of ${over.limit} used)`,
+      });
     }
 
     const { sshKeyIds, ...serverFields } = body;
@@ -103,7 +117,7 @@ export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, v
       .values({ ...serverFields, ownerId: req.user.id, sshPublicKeys: keys.map((k) => k.publicKey) })
       .returning();
     await audit(db, { actorId: req.user.id, action: "server.create", targetType: "server", targetId: row!.id, data: body });
-    await enqueueVmOp(queue, { serverId: row!.id, op: "create", actorId: req.user.id });
+    await enqueueVmOp(queues.vm, { serverId: row!.id, op: "create", actorId: req.user.id });
     return reply.code(202).send({ server: toDto(row!) });
   });
 
@@ -126,7 +140,7 @@ export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, v
       return { code: 409, body: { error: `Cannot ${op} a server that is ${row.status}` } };
     }
     await audit(db, { actorId: req.user.id, action: `server.${op}`, targetType: "server", targetId: row.id });
-    await enqueueVmOp(queue, { serverId: row.id, op, actorId: req.user.id });
+    await enqueueVmOp(queues.vm, { serverId: row.id, op, actorId: req.user.id });
     return { code: 202, body: { server: toDto(updated) } };
   }
 
@@ -144,11 +158,11 @@ export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, v
   app.get("/servers/:id/console", { preHandler: app.authenticate }, async (req, reply) => {
     const row = await loadOwned(req);
     if (!row) return reply.code(404).send({ error: "Server not found" });
-    if (row.status !== "active" || !row.vhiServerId) {
+    if (row.status !== "active" || !row.vhiServerId || !row.vhiProjectId) {
       return reply.code(409).send({ error: "The console is only available while the server is running" });
     }
     await audit(db, { actorId: req.user.id, action: "server.console", targetType: "server", targetId: row.id });
-    return { url: await vhi.getConsoleUrl(row.vhiServerId) };
+    return { url: await vhi.project(row.vhiProjectId).getConsoleUrl(row.vhiServerId) };
   });
 }
 

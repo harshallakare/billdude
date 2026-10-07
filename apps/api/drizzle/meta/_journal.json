@@ -15,6 +15,13 @@
       "when": 1791360317875,
       "tag": "0001_ssh_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791360613701,
+      "tag": "0002_customer_projects",
+      "breakpoints": true
     }
   ]
 }

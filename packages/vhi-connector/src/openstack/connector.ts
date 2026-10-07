@@ -2,8 +2,9 @@
  * packages/vhi-connector/src/openstack/connector.ts
  *
  * Usage: VhiConnector implementation for Virtuozzo Hybrid Infrastructure,
- * which exposes OpenStack-compatible Nova (compute), Glance (image) and
- * Neutron (network) APIs. Construct it through createVhiConnector():
+ * which exposes OpenStack-compatible Keystone (identity), Nova (compute),
+ * Cinder (volume), Glance (image) and Neutron (network) APIs. Construct it
+ * through createVhiConnector():
  *
  *   const vhi = createVhiConnector({
  *     authUrl: "https://vhi.example.com:5000/v3",
@@ -11,19 +12,25 @@
  *     projectName: "billdude", projectDomain: "Default",
  *     volumeType: "default",          // optional VHI storage policy
  *   });
- *   const { id } = await vhi.createServer({ name, flavorId, imageId, networkId, bootVolumeGb: 20 });
+ *   const project = await vhi.ensureProject({ name: "billdude-acct-1" });
+ *   const { id } = await vhi.project(project.id).createServer({ name, flavorId, imageId, networkId, bootVolumeGb: 20 });
+ *
+ * The service account needs permission to create projects and assign roles
+ * in its domain (domain admin or cloud admin). It grants itself `memberRole`
+ * on every customer project and then works inside it with a project-scoped token.
  *
  * VMs always boot from a Cinder volume created from the image, because that
  * is how VHI compute provisions disks.
  */
-import type { VhiConnector } from "../connector.js";
-import { VhiNotFoundError } from "../errors.js";
+import type { VhiConnector, VhiProject } from "../connector.js";
+import { VhiConflictError, VhiError, VhiNotFoundError } from "../errors.js";
 import type {
   CreateServerInput,
   Flavor,
   Image,
   Network,
   PowerAction,
+  ProjectQuotas,
   Server,
   ServerAddress,
   ServerStatus,
@@ -33,6 +40,8 @@ import { OpenStackClient, type OpenStackCredentials } from "./client.js";
 export interface VhiConnectorOptions extends OpenStackCredentials {
   /** VHI storage policy (Cinder volume type) for boot volumes. */
   volumeType?: string;
+  /** Role the service account grants itself on customer projects (default "member"). */
+  memberRole?: string;
 }
 
 /* ---- Raw OpenStack payload shapes (only the fields we read) ---- */
@@ -74,19 +83,22 @@ interface NeutronNetwork {
 const KNOWN_STATUSES = new Set<ServerStatus>(["BUILD", "ACTIVE", "SHUTOFF", "REBOOT", "ERROR", "DELETED"]);
 
 export class OpenStackVhiConnector implements VhiConnector {
-  private readonly client: OpenStackClient;
+  /** Client scoped to the configured service project; used for catalog and admin calls. */
+  private readonly admin: OpenStackClient;
+  private readonly projects = new Map<string, OpenStackVhiProject>();
+  private memberRoleId: Promise<string> | null = null;
 
   constructor(private readonly options: VhiConnectorOptions) {
-    this.client = new OpenStackClient(options);
+    this.admin = new OpenStackClient(options);
   }
 
   async listFlavors(): Promise<Flavor[]> {
-    const body = await this.client.request<{ flavors: NovaFlavor[] }>("compute", "GET", "/flavors/detail");
+    const body = await this.admin.request<{ flavors: NovaFlavor[] }>("compute", "GET", "/flavors/detail");
     return body.flavors.map((f) => ({ id: f.id, name: f.name, vcpus: f.vcpus, ramMb: f.ram, diskGb: f.disk }));
   }
 
   async listImages(): Promise<Image[]> {
-    const body = await this.client.request<{ images: GlanceImage[] }>(
+    const body = await this.admin.request<{ images: GlanceImage[] }>(
       "image",
       "GET",
       "/v2/images?status=active&limit=1000",
@@ -101,7 +113,7 @@ export class OpenStackVhiConnector implements VhiConnector {
   }
 
   async listNetworks(): Promise<Network[]> {
-    const body = await this.client.request<{ networks: NeutronNetwork[] }>("network", "GET", "/v2.0/networks");
+    const body = await this.admin.request<{ networks: NeutronNetwork[] }>("network", "GET", "/v2.0/networks");
     return body.networks.map((n) => ({
       id: n.id,
       name: n.name,
@@ -109,6 +121,87 @@ export class OpenStackVhiConnector implements VhiConnector {
       shared: n.shared ?? false,
     }));
   }
+
+  async ensureProject(input: { name: string; description?: string }): Promise<{ id: string }> {
+    const { userId, projectDomainId } = await this.admin.identity();
+    const projectId = (await this.findProject(input.name, projectDomainId)) ?? (await this.createProject(input, projectDomainId));
+    const roleId = await this.getMemberRoleId();
+    // PUT is idempotent: re-granting an existing assignment is a no-op.
+    await this.admin.request(
+      "identity",
+      "PUT",
+      `/projects/${encodeURIComponent(projectId)}/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
+    );
+    return { id: projectId };
+  }
+
+  async setProjectQuotas(projectId: string, quotas: ProjectQuotas): Promise<void> {
+    const id = encodeURIComponent(projectId);
+    await this.admin.request("compute", "PUT", `/os-quota-sets/${id}`, {
+      body: { quota_set: { instances: quotas.instances, cores: quotas.cores, ram: quotas.ramMb } },
+    });
+    await this.admin.request("volumev3", "PUT", `/os-quota-sets/${id}`, {
+      body: { quota_set: { volumes: quotas.volumes, gigabytes: quotas.gigabytes } },
+    });
+  }
+
+  project(projectId: string): VhiProject {
+    let project = this.projects.get(projectId);
+    if (!project) {
+      project = new OpenStackVhiProject(new OpenStackClient(this.options, { projectId }), this.options);
+      this.projects.set(projectId, project);
+    }
+    return project;
+  }
+
+  private async findProject(name: string, domainId: string): Promise<string | null> {
+    const body = await this.admin.request<{ projects: { id: string }[] }>(
+      "identity",
+      "GET",
+      `/projects?name=${encodeURIComponent(name)}&domain_id=${encodeURIComponent(domainId)}`,
+    );
+    return body.projects[0]?.id ?? null;
+  }
+
+  private async createProject(input: { name: string; description?: string }, domainId: string): Promise<string> {
+    try {
+      const body = await this.admin.request<{ project: { id: string } }>("identity", "POST", "/projects", {
+        body: { project: { name: input.name, domain_id: domainId, description: input.description ?? "", enabled: true } },
+      });
+      return body.project.id;
+    } catch (error) {
+      // Another worker created it concurrently.
+      if (error instanceof VhiConflictError) {
+        const id = await this.findProject(input.name, domainId);
+        if (id) return id;
+      }
+      throw error;
+    }
+  }
+
+  private getMemberRoleId(): Promise<string> {
+    const name = this.options.memberRole ?? "member";
+    this.memberRoleId ??= this.admin
+      .request<{ roles: { id: string; name: string }[] }>("identity", "GET", `/roles?name=${encodeURIComponent(name)}`)
+      .then((body) => {
+        const role = body.roles.find((r) => r.name === name);
+        if (!role) throw new VhiError(`Keystone role "${name}" does not exist`, 404, false);
+        return role.id;
+      })
+      .catch((error: unknown) => {
+        this.memberRoleId = null;
+        throw error;
+      });
+    return this.memberRoleId;
+  }
+}
+
+/** Server operations inside one customer project. */
+class OpenStackVhiProject implements VhiProject {
+  constructor(
+    private readonly client: OpenStackClient,
+    private readonly options: VhiConnectorOptions,
+  ) {}
 
   async listServers(filter: { metadata?: Record<string, string> } = {}): Promise<Server[]> {
     const body = await this.client.request<{ servers: NovaServer[] }>("compute", "GET", "/servers/detail");

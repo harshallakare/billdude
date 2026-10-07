@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { QuotaSummary } from "../components/QuotaSummary";
 import { Button, Card, ErrorText, StatusBadge } from "../components/ui";
 import { api, TRANSITIONAL } from "../lib/api";
 import { useCurrentUser } from "../lib/auth";
@@ -39,6 +40,7 @@ export function ServersPage() {
         </div>
       </div>
 
+      <QuotaSummary refreshKey={data?.servers.length} />
       <ErrorText error={error} />
 
       <Card className="overflow-x-auto p-0">

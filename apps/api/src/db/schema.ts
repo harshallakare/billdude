@@ -8,6 +8,7 @@
  *   import { users, servers } from "./db/schema.js";
  *   await db.select().from(servers).where(eq(servers.ownerId, userId));
  */
+import type { ProjectQuotas } from "@billdude/vhi-connector";
 import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["admin", "customer"]);
@@ -37,6 +38,10 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   role: userRole("role").notNull().default("customer"),
   status: userStatus("status").notNull().default("active"),
+  /** The customer's own VHI project; created lazily by the worker. */
+  vhiProjectId: text("vhi_project_id"),
+  /** Admin override of the default quotas; null = use defaults from config. */
+  quotas: jsonb("quotas").$type<ProjectQuotas>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -48,6 +53,8 @@ export const servers = pgTable(
       .notNull()
       .references(() => users.id),
     name: text("name").notNull(),
+    /** VHI project the VM lives in; set when provisioning starts. */
+    vhiProjectId: text("vhi_project_id"),
     /** Nova server id; null until the create call has succeeded. */
     vhiServerId: text("vhi_server_id").unique(),
     flavorId: text("flavor_id").notNull(),

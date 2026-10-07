@@ -9,7 +9,7 @@
 import type { VhiConnector } from "./connector.js";
 import { OpenStackVhiConnector, type VhiConnectorOptions } from "./openstack/connector.js";
 
-export type { VhiConnector } from "./connector.js";
+export type { VhiConnector, VhiProject } from "./connector.js";
 export type { VhiConnectorOptions } from "./openstack/connector.js";
 export * from "./errors.js";
 export * from "./types.js";

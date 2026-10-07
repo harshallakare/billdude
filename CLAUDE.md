@@ -13,8 +13,8 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
 
 | Path | What |
 |---|---|
-| `packages/vhi-connector` | `VhiConnector` interface + OpenStack (Keystone v3 / Nova / Glance / Neutron) implementation. The only code that knows OpenStack payloads. |
-| `apps/mock-vhi` | In-memory fake of the VHI APIs used for dev and tests (BUILD→ACTIVE delays, `fail` in a name → ERROR, 409s on bad transitions). |
+| `packages/vhi-connector` | `VhiConnector` (cloud-wide: catalog, projects, quotas) + `VhiProject` (per-customer servers) interfaces and the OpenStack (Keystone v3 / Nova / Cinder / Glance / Neutron) implementation. The only code that knows OpenStack payloads. |
+| `apps/mock-vhi` | In-memory fake of the VHI APIs used for dev and tests (projects/roles, project-scoped tokens, quota enforcement, BUILD→ACTIVE delays, `fail` in a name → ERROR, 409s on bad transitions). `/_mock/*` exposes internal state to tests. |
 | `apps/api` | Fastify API (`src/main.ts`) and BullMQ worker (`src/worker-main.ts`) sharing one codebase. Postgres via Drizzle. |
 | `apps/web` | React + Vite + Tailwind v4 + React Query customer portal. Proxies `/api` to :4000. |
 
@@ -26,6 +26,12 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
 - **Jobs must be idempotent.** `create` first looks for a Nova VM tagged
   `billdude_server_id=<row id>` before creating one; power actions check current state.
   Throw `UnrecoverableError` for permanent failures; let retryable `VhiError`s propagate.
+- **One VHI project per customer.** `accounts.ensureProject()` (worker only) creates
+  `<VHI_PROJECT_PREFIX><user id>`, grants the service user `VHI_MEMBER_ROLE`, applies quotas
+  and stores `users.vhi_project_id`. Servers record `vhi_project_id` too; always go through
+  `vhi.project(id)` for server calls. Registration enqueues an `account-ops` provision job.
+- **Quotas are enforced twice**: a friendly portal check (`exceededQuota` in `accounts.ts`)
+  and VHI's own Nova/Cinder quotas (`VhiQuotaError` → job fails with a clear message).
 - **Only `packages/vhi-connector` imports OpenStack shapes.** Everything else uses the
   domain types in `src/types.ts`. A new cloud backend = a new `VhiConnector` implementation.
 - **VHI boots VMs from volumes**: `createServer` always sends `block_device_mapping_v2`
@@ -66,8 +72,8 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 
 - [x] Phase 0 — monorepo, auth/roles, DB, queue/worker, CI, mock VHI
 - [x] Phase 1 (core) — VHI connector: catalog, VM create/start/stop/reboot/delete, noVNC console
-- [ ] Phase 1 (rest) — per-customer VHI projects + quotas, volumes, floating IPs, SSH keys,
-      security groups, snapshots; test against a real VHI cluster
+- [x] Phase 1 — SSH keys via cloud-init; per-customer VHI projects + quotas; network allow-list
+- [ ] Phase 1 (rest) — volumes, floating IPs, security groups, snapshots; test against a real VHI cluster
 - [ ] Phase 2 — portal polish: dashboard, SSH key manager, embedded noVNC
 - [ ] Phase 3 — billing: plans/pricing, hourly usage metering, prepaid wallet, invoices, Razorpay
 - [ ] Phase 4 — admin: customer mgmt, suspend-on-non-payment, tickets, audit viewer
@@ -75,7 +81,4 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 
 ## Known gaps (deliberate for now)
 
-- All customer VMs live in one VHI project (`VHI_PROJECT_NAME`), tagged with
-  `billdude_account_id`. Move to project-per-customer before production.
-- Customers can pick any network the service account can see; restrict to an allow-list.
 - No CSRF token yet (SameSite=Lax + JSON bodies only); add before public launch.
