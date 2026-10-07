@@ -1,0 +1,7 @@
+// packages/vhi-connector/tsconfig.build.json
+// Usage: emits dist/ for runtime consumers (`pnpm --filter @billdude/vhi-connector build`).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src", "types": ["node"] },
+  "include": ["src"]
+}

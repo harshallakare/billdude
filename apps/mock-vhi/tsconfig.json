@@ -1,0 +1,7 @@
+// apps/mock-vhi/tsconfig.json
+// Usage: type-checks the mock server (`pnpm --filter @billdude/mock-vhi typecheck`).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": ["src"]
+}

@@ -1,0 +1,10 @@
+# .gitignore
+# Usage: files git must never track (dependencies, builds, local secrets).
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store

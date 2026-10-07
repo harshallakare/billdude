@@ -1,0 +1,11 @@
+# pnpm-workspace.yaml
+# Usage: declares the monorepo workspaces for pnpm.
+#   pnpm install            -> installs every app/package listed below
+#   pnpm --filter <name> X  -> runs script X in one workspace
+packages:
+  - "apps/*"
+  - "packages/*"
+onlyBuiltDependencies:
+  - esbuild
+  - "@node-rs/argon2"
+  - msgpackr-extract

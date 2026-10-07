@@ -1,0 +1,29 @@
+{
+  "name": "billdude",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Self-service cloud portal and billing for Virtuozzo Hybrid Infrastructure (VHI)",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @billdude/mock-vhi --filter @billdude/vhi-connector build && pnpm -r --parallel --filter \"./apps/*\" run \"/^dev/\"",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r test",
+    "db:migrate": "pnpm --filter @billdude/api db:migrate",
+    "db:generate": "pnpm --filter @billdude/api db:generate",
+    "seed:admin": "pnpm --filter @billdude/api seed:admin"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2"
+  }
+}

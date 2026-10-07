@@ -1,0 +1,9 @@
+/*
+ * apps/web/src/index.css
+ * Usage: global styles; imported once by src/main.tsx. Tailwind v4 utilities are enabled here.
+ */
+@import "tailwindcss";
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}

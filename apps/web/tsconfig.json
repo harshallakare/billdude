@@ -1,0 +1,15 @@
+// apps/web/tsconfig.json
+// Usage: type-checks the browser app (`pnpm --filter @billdude/web typecheck`). Vite does the bundling.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "declaration": false,
+    "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts"]
+}

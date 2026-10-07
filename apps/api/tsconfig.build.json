@@ -1,0 +1,7 @@
+// apps/api/tsconfig.build.json
+// Usage: emits dist/ for production (`pnpm --filter @billdude/api build`, then `start` / `start:worker`).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src", "types": ["node"] },
+  "include": ["src"]
+}

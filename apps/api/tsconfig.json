@@ -1,0 +1,7 @@
+// apps/api/tsconfig.json
+// Usage: type-checks API sources and tests (`pnpm --filter @billdude/api typecheck`).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": ["src", "test", "drizzle.config.ts", "vitest.config.ts"]
+}

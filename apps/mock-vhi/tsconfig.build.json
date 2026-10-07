@@ -1,0 +1,7 @@
+// apps/mock-vhi/tsconfig.build.json
+// Usage: emits dist/ (`pnpm --filter @billdude/mock-vhi build`), used by tests and `start`.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src", "types": ["node"] },
+  "include": ["src"]
+}

@@ -1,0 +1,7 @@
+// packages/vhi-connector/tsconfig.json
+// Usage: type-checks sources and tests (`pnpm --filter @billdude/vhi-connector typecheck`).
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": ["src", "test"]
+}
