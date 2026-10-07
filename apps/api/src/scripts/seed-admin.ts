@@ -20,10 +20,19 @@ if (password.length < 10) throw new Error("SEED_ADMIN_PASSWORD must be at least 
 const { db, pool } = createDb(databaseUrl);
 const [existing] = await db.select().from(users).where(eq(users.email, email));
 if (existing) {
-  await db.update(users).set({ role: "admin", status: "active" }).where(eq(users.id, existing.id));
+  await db
+    .update(users)
+    .set({ role: "admin", status: "active", emailVerifiedAt: existing.emailVerifiedAt ?? new Date() })
+    .where(eq(users.id, existing.id));
   console.log(`Promoted ${email} to admin.`);
 } else {
-  await db.insert(users).values({ email, name: "Administrator", role: "admin", passwordHash: await hashPassword(password) });
+  await db.insert(users).values({
+    email,
+    name: "Administrator",
+    role: "admin",
+    passwordHash: await hashPassword(password),
+    emailVerifiedAt: new Date(),
+  });
   console.log(`Created admin ${email}.`);
 }
 await pool.end();

@@ -46,6 +46,11 @@ export const users = pgTable("users", {
   balanceMicros: bigint("balance_micros", { mode: "number" }).notNull().default(0),
   /** Set when the balance first went negative; cleared when it is topped up again. */
   overdueSince: timestamp("overdue_since", { withTimezone: true }),
+  /** Last low-balance warning email, so customers get at most one a day. */
+  lowBalanceNotifiedAt: timestamp("low_balance_notified_at", { withTimezone: true }),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  /** Bumped on password change; sessions carrying an older value are rejected. */
+  sessionVersion: integer("session_version").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -240,6 +245,25 @@ export const firewallRules = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("firewall_rules_user_idx").on(t.userId)],
+);
+
+export const authTokenPurpose = pgEnum("auth_token_purpose", ["password_reset", "email_verify"]);
+
+/** Single-use emailed tokens. Only a SHA-256 hash of the token is stored. */
+export const authTokens = pgTable(
+  "auth_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    purpose: authTokenPurpose("purpose").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("auth_tokens_user_idx").on(t.userId, t.purpose)],
 );
 
 export const auditLogs = pgTable(

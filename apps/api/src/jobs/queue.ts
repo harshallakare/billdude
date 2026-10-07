@@ -8,13 +8,16 @@
  *   await enqueueVmOp(queues.vm, { serverId, op: "create", actorId });
  *   await enqueueAccountOp(queues.account, { userId, op: "provision" });
  *   await scheduleBillingTicks(queues.billing);       // worker startup: hourly metering
+ *   await enqueueMail(queues.mail, { to, subject, text });
  */
 import { Queue, type DefaultJobOptions } from "bullmq";
 import type { Redis } from "ioredis";
+import type { MailMessage } from "../mail/mailer.js";
 
 export const VM_QUEUE = "vm-ops";
 export const ACCOUNT_QUEUE = "account-ops";
 export const BILLING_QUEUE = "billing-ops";
+export const MAIL_QUEUE = "mail";
 
 export type VmOp = "create" | "start" | "stop" | "reboot" | "delete";
 
@@ -36,13 +39,17 @@ export interface BillingJobData {
   op: "tick";
 }
 
+export type MailJobData = MailMessage;
+
 export type VmQueue = Queue<VmJobData>;
 export type AccountQueue = Queue<AccountJobData>;
 export type BillingQueue = Queue<BillingJobData>;
+export type MailQueue = Queue<MailJobData>;
 export interface Queues {
   vm: VmQueue;
   account: AccountQueue;
   billing: BillingQueue;
+  mail: MailQueue;
 }
 
 const defaultJobOptions: DefaultJobOptions = {
@@ -58,6 +65,7 @@ export function createQueues(connection: Redis, prefix?: string): Queues {
     vm: new Queue<VmJobData>(VM_QUEUE, opts),
     account: new Queue<AccountJobData>(ACCOUNT_QUEUE, opts),
     billing: new Queue<BillingJobData>(BILLING_QUEUE, opts),
+    mail: new Queue<MailJobData>(MAIL_QUEUE, opts),
   };
 }
 
@@ -68,6 +76,10 @@ export async function enqueueVmOp(queue: VmQueue, data: VmJobData): Promise<void
 /** Registers (or updates) the hourly metering schedule. Safe to call on every worker start. */
 export async function scheduleBillingTicks(queue: BillingQueue, everyMs = 3600_000): Promise<void> {
   await queue.upsertJobScheduler("billing-tick", { every: everyMs }, { name: "tick", data: { op: "tick" } });
+}
+
+export async function enqueueMail(queue: MailQueue, message: MailMessage): Promise<void> {
+  await queue.add("send", message);
 }
 
 export async function enqueueAccountOp(queue: AccountQueue, data: AccountJobData): Promise<void> {

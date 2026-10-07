@@ -43,6 +43,13 @@
       "when": 1791361835671,
       "tag": "0005_firewall",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791362475058,
+      "tag": "0006_email",
+      "breakpoints": true
     }
   ]
 }

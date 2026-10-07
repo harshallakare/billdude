@@ -10,6 +10,7 @@
 import { loadConfig } from "./config.js";
 import { scheduleBillingTicks } from "./jobs/queue.js";
 import { createWorkers } from "./jobs/worker.js";
+import { createMailer } from "./mail/mailer.js";
 import { createRuntime } from "./runtime.js";
 
 const runtime = createRuntime(loadConfig());
@@ -19,6 +20,7 @@ const workers = createWorkers({
   accounts: runtime.accounts,
   config: runtime.config,
   queues: runtime.queues,
+  mailer: createMailer(runtime.config),
   connection: runtime.redis,
 });
 await scheduleBillingTicks(runtime.queues.billing);
@@ -29,6 +31,7 @@ workers.account.on("completed", (job) => console.log(`[worker] ${job.name} accou
 workers.account.on("failed", (job, err) => console.error(`[worker] ${job?.name} account ${job?.data.userId} failed: ${err.message}`));
 workers.billing.on("completed", (_job, result) => console.log(`[worker] billing tick ${JSON.stringify(result)}`));
 workers.billing.on("failed", (_job, err) => console.error(`[worker] billing tick failed: ${err.message}`));
+workers.mail.on("failed", (job, err) => console.error(`[worker] mail to ${job?.data.to} failed: ${err.message}`));
 
 const shutdown = async () => {
   await workers.close();

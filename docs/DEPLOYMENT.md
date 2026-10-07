@@ -17,6 +17,7 @@ Caddy with automatic HTTPS — on a single Linux host using Docker Compose.
 | A domain name | An A (and optionally AAAA) record for e.g. `cloud.example.com` pointing at the server. Ports 80 and 443 open. |
 | VHI service account | See section 2. |
 | Razorpay account | Key id + secret (Dashboard → Account & Settings → API Keys). Use test keys first. |
+| SMTP account | Any provider (Amazon SES, Zoho, SendGrid, Postmark…) for password resets, verification and billing notices → `SMTP_URL`, `MAIL_FROM`. Set up SPF/DKIM for your sending domain. |
 
 The server must be able to reach your VHI Keystone endpoint (usually port 5000) and the
 compute/network/volume endpoints listed in its service catalog, plus `api.razorpay.com`.
@@ -53,7 +54,7 @@ git clone https://github.com/harshallakare/billdude.git && cd billdude
 cp deploy/.env.production.example deploy/.env && chmod 600 deploy/.env
 openssl rand -hex 32   # use for POSTGRES_PASSWORD
 openssl rand -hex 32   # use for JWT_SECRET
-nano deploy/.env       # DOMAIN, VHI_*, RAZORPAY_*, SEED_ADMIN_*
+nano deploy/.env       # DOMAIN, VHI_*, RAZORPAY_*, SMTP_URL, MAIL_FROM, SEED_ADMIN_*
 ```
 
 Any setting from the root `.env.example` (quotas, prices, grace period, sign-up credit…)

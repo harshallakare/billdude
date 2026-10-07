@@ -3,7 +3,7 @@
  *
  * Usage: wires the job processors to BullMQ workers (one per queue).
  *
- *   const workers = createWorkers({ db, vhi, accounts, config, queues, connection: redis });
+ *   const workers = createWorkers({ db, vhi, accounts, config, queues, mailer, connection: redis });
  *   ...
  *   await workers.close();     // graceful shutdown
  *
@@ -13,19 +13,29 @@ import { Worker } from "bullmq";
 import type { Redis } from "ioredis";
 import { runBillingTick } from "../billing/metering.js";
 import type { Config } from "../config.js";
+import type { Mailer } from "../mail/mailer.js";
 import { createProcessors, markJobFailed, type ProcessorDeps } from "./processor.js";
 import {
   ACCOUNT_QUEUE,
   BILLING_QUEUE,
+  MAIL_QUEUE,
   VM_QUEUE,
   type AccountJobData,
   type BillingJobData,
+  type MailJobData,
   type Queues,
   type VmJobData,
 } from "./queue.js";
 
 export function createWorkers(
-  deps: ProcessorDeps & { config: Config; queues: Queues; connection: Redis; prefix?: string; concurrency?: number },
+  deps: ProcessorDeps & {
+    config: Config;
+    queues: Queues;
+    mailer: Mailer;
+    connection: Redis;
+    prefix?: string;
+    concurrency?: number;
+  },
 ) {
   const { processVmJob, processAccountJob } = createProcessors(deps);
   const common = { connection: deps.connection, ...(deps.prefix ? { prefix: deps.prefix } : {}) };
@@ -52,12 +62,15 @@ export function createWorkers(
     { ...common, concurrency: 1 },
   );
 
+  const mail = new Worker<MailJobData>(MAIL_QUEUE, (job) => deps.mailer.send(job.data), { ...common, concurrency: 5 });
+
   return {
     vm,
     account,
     billing,
+    mail,
     async close() {
-      await Promise.all([vm.close(), account.close(), billing.close()]);
+      await Promise.all([vm.close(), account.close(), billing.close(), mail.close()]);
     },
   };
 }

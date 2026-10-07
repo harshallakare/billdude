@@ -78,6 +78,9 @@ export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, 
 
   app.post("/servers", { preHandler: app.authenticate }, async (req, reply) => {
     const body = createBody.parse(req.body);
+    if (config.REQUIRE_EMAIL_VERIFICATION && !req.user.emailVerified && req.user.role !== "admin") {
+      return reply.code(403).send({ error: "Please confirm your email address before creating servers." });
+    }
 
     const [flavors, images, networks] = await Promise.all([catalog.flavors(), catalog.images(), catalog.networks()]);
     const image = images.find((i) => i.id === body.imageId);

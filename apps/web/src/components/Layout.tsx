@@ -55,16 +55,24 @@ export function Layout() {
                 {wallet.data.currency} {wallet.data.balance}
               </Link>
             )}
-            <span className="text-sm text-slate-600">
+            <Link to="/account" className="text-sm text-slate-600 hover:text-slate-900">
               {user?.name}
               {user?.role === "admin" && <span className="ml-1 rounded bg-indigo-100 px-1.5 text-xs text-indigo-700">admin</span>}
-            </span>
+            </Link>
             <Button variant="secondary" onClick={() => logout.mutate()} disabled={logout.isPending}>
               Sign out
             </Button>
           </div>
         </div>
       </header>
+      {user && !user.emailVerified && (
+        <div className="bg-amber-100 px-4 py-2 text-center text-sm text-amber-900 print:hidden">
+          Please confirm your email address — we sent a link to {user.email}.{" "}
+          <Link to="/account" className="font-semibold underline">
+            Resend
+          </Link>
+        </div>
+      )}
       {wallet.data?.overdueSince && (
         <div className="bg-red-600 px-4 py-2 text-center text-sm text-white print:hidden">
           Your account balance is overdue.{" "}

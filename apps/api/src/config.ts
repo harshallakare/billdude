@@ -18,6 +18,21 @@ const schema = z.object({
   API_PORT: z.coerce.number().int().positive().default(4000),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+  /** Public URL of the portal used in email links; defaults to the first WEB_ORIGIN. */
+  PUBLIC_URL: z.string().url().optional(),
+  /** Customers must confirm their email address before creating servers. */
+  REQUIRE_EMAIL_VERIFICATION: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  /** smtp(s)://user:pass@host:port — leave empty in development to log emails instead of sending. */
+  SMTP_URL: z.string().optional().transform((v) => v || undefined),
+  MAIL_FROM: z.string().default("billdude <no-reply@localhost>"),
+  /** Comma-separated addresses notified about new support tickets. */
+  SUPPORT_NOTIFY_EMAILS: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean)),
   /** Max register/login attempts per IP per minute. */
   AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
   DATABASE_URL: z.string().url(),
@@ -71,7 +86,7 @@ const schema = z.object({
   BILLING_COMPANY_NAME: z.string().default("billdude"),
 });
 
-export type Config = z.infer<typeof schema>;
+export type Config = z.infer<typeof schema> & { PUBLIC_URL: string };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const result = schema.safeParse(env);
@@ -79,9 +94,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const problems = result.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid configuration:\n${problems}`);
   }
-  const config = result.data;
+  const config = { ...result.data, PUBLIC_URL: result.data.PUBLIC_URL ?? result.data.WEB_ORIGIN.split(",")[0]!.trim() };
   if (config.NODE_ENV === "production" && !(config.RAZORPAY_KEY_ID && config.RAZORPAY_KEY_SECRET)) {
     throw new Error("Invalid configuration:\n  - RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required in production");
+  }
+  if (config.NODE_ENV === "production" && !config.SMTP_URL) {
+    throw new Error("Invalid configuration:\n  - SMTP_URL is required in production (password resets and notifications)");
   }
   return config;
 }

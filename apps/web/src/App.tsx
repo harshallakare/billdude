@@ -3,6 +3,8 @@
  *
  * Usage: top-level routes. Rendered by src/main.tsx.
  *   /login, /register          public
+ *   /forgot-password, /reset-password, /verify-email   public emailed-link pages
+ *   /account                   profile, email verification, password change
  *   /servers                   list (default after sign-in)
  *   /servers/new               create wizard
  *   /servers/:id               detail + power actions + console
@@ -24,10 +26,12 @@ import { AdminCustomersPage } from "./pages/admin/Customers";
 import { AdminOverviewPage } from "./pages/admin/Overview";
 import { AdminPricingPage } from "./pages/admin/Pricing";
 import { AdminTicketsPage } from "./pages/admin/Tickets";
+import { AccountPage } from "./pages/Account";
 import { BillingPage } from "./pages/Billing";
 import { CreateServerPage } from "./pages/CreateServer";
 import { FirewallPage } from "./pages/Firewall";
 import { LoginPage } from "./pages/Login";
+import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from "./pages/PasswordReset";
 import { RegisterPage } from "./pages/Register";
 import { ServerDetailPage } from "./pages/ServerDetail";
 import { ServersPage } from "./pages/Servers";
@@ -49,6 +53,9 @@ export function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route
         element={
           <RequireAuth>
@@ -61,6 +68,7 @@ export function App() {
         <Route path="/servers/:id" element={<ServerDetailPage />} />
         <Route path="/ssh-keys" element={<SshKeysPage />} />
         <Route path="/firewall" element={<FirewallPage />} />
+        <Route path="/account" element={<AccountPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/billing/statements/:month" element={<StatementPage />} />
         <Route path="/support" element={<SupportPage />} />

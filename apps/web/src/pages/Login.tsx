@@ -46,6 +46,11 @@ export function LoginPage() {
           />
         </Field>
         <ErrorText error={login.error} />
+        <p className="text-right text-sm">
+          <Link to="/forgot-password" className="text-indigo-600 hover:underline">
+            Forgot password?
+          </Link>
+        </p>
         <Button type="submit" className="w-full" disabled={login.isPending}>
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>

@@ -18,21 +18,24 @@
  *     overlapping run cannot charge the same seconds twice.
  *   - Customers below zero for longer than BILLING_GRACE_HOURS have their
  *     running servers stopped (never deleted).
+ *   - Customers are emailed when less than a day of balance is left (at most
+ *     daily), when they go overdue, and when servers are stopped.
  */
 import { and, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { audit } from "../audit.js";
 import type { Config } from "../config.js";
 import type { Db } from "../db/client.js";
 import { servers, usageRecords, users, type ServerRow } from "../db/schema.js";
-import { enqueueVmOp, type Queues } from "../jobs/queue.js";
+import { enqueueMail, enqueueVmOp, type Queues } from "../jobs/queue.js";
+import { templates } from "../mail/templates.js";
 import { postTransaction } from "./ledger.js";
 import { formatAmount } from "./money.js";
-import { charge, loadPriceBook } from "./pricing.js";
+import { charge, loadPriceBook, type PriceBook } from "./pricing.js";
 
 export interface MeteringDeps {
   db: Db;
   config: Config;
-  queues: Pick<Queues, "vm">;
+  queues: Pick<Queues, "vm" | "mail">;
 }
 
 export interface TickResult {
@@ -117,6 +120,7 @@ export async function runBillingTick({ db, config, queues }: MeteringDeps, now =
   }
 
   const stopped = await enforceNonPayment({ db, config, queues }, now);
+  await notifyBalances({ db, config, queues }, now, prices);
   return { charged, totalMicros, stopped };
 }
 
@@ -140,5 +144,58 @@ async function enforceNonPayment({ db, config, queues }: MeteringDeps, now: Date
     await audit(db, { actorId: null, action: "server.stop.nonpayment", targetType: "server", targetId: server.id });
     await enqueueVmOp(queues.vm, { serverId: server.id, op: "stop", actorId: null });
   }
+
+  const perUser = new Map<string, number>();
+  for (const s of running) perUser.set(s.ownerId, (perUser.get(s.ownerId) ?? 0) + 1);
+  for (const [userId, count] of perUser) {
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    if (user) await enqueueMail(queues.mail, { to: user.email, ...templates.serversStopped(user.name, count, billingLink(config)) });
+  }
   return running.length;
+}
+
+const billingLink = (config: Config) => `${config.PUBLIC_URL.replace(/\/+$/, "")}/billing`;
+
+/** Low-balance warnings (at most daily) and a one-off notice when an account goes overdue. */
+async function notifyBalances({ db, config, queues }: MeteringDeps, now: Date, prices: PriceBook): Promise<void> {
+  const dayAgo = new Date(now.getTime() - 24 * 3600_000);
+  const candidates = await db
+    .select()
+    .from(users)
+    .where(
+      and(
+        ne(users.role, "admin"),
+        or(isNull(users.lowBalanceNotifiedAt), lt(users.lowBalanceNotifiedAt, dayAgo), isNotNull(users.overdueSince)),
+      ),
+    );
+
+  for (const user of candidates) {
+    // Overdue: notify once per overdue episode.
+    if (user.overdueSince) {
+      if (user.lowBalanceNotifiedAt && user.lowBalanceNotifiedAt >= user.overdueSince) continue;
+      await enqueueMail(queues.mail, {
+        to: user.email,
+        ...templates.overdue(user.name, `${formatAmount(user.balanceMicros)} ${config.BILLING_CURRENCY}`, config.BILLING_GRACE_HOURS, billingLink(config)),
+      });
+      await db.update(users).set({ lowBalanceNotifiedAt: now }).where(eq(users.id, user.id));
+      continue;
+    }
+
+    const live = await db
+      .select()
+      .from(servers)
+      .where(and(eq(servers.ownerId, user.id), ne(servers.status, "deleted"), isNotNull(servers.billingStartedAt)));
+    const hourly = live.reduce(
+      (sum, s) => sum + prices.serverHourly({ id: s.flavorId, vcpus: s.flavorVcpus, ramMb: s.flavorRamMb }, s.bootVolumeGb),
+      0,
+    );
+    if (hourly <= 0) continue;
+    const hoursLeft = Math.floor(user.balanceMicros / hourly);
+    if (hoursLeft >= 24) continue;
+    await enqueueMail(queues.mail, {
+      to: user.email,
+      ...templates.lowBalance(user.name, `${formatAmount(user.balanceMicros)} ${config.BILLING_CURRENCY}`, hoursLeft, billingLink(config)),
+    });
+    await db.update(users).set({ lowBalanceNotifiedAt: now }).where(eq(users.id, user.id));
+  }
 }

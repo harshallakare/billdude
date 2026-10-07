@@ -26,6 +26,7 @@ export interface User {
   email: string;
   name: string;
   role: "admin" | "customer";
+  emailVerified: boolean;
 }
 
 export interface Server {
@@ -240,6 +241,12 @@ export const api = {
   register: (name: string, email: string, password: string) =>
     request<{ user: User }>("POST", "/auth/register", { name, email, password }),
   logout: () => request<{ ok: true }>("POST", "/auth/logout", {}),
+  verifyEmail: (token: string) => request<{ ok: true }>("POST", "/auth/verify-email", { token }),
+  resendVerification: () => request<{ ok: true }>("POST", "/auth/resend-verification", {}),
+  forgotPassword: (email: string) => request<{ ok: true }>("POST", "/auth/forgot-password", { email }),
+  resetPassword: (token: string, password: string) => request<{ ok: true }>("POST", "/auth/reset-password", { token, password }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: true }>("POST", "/auth/change-password", { currentPassword, newPassword }),
 
   catalog: () => request<{ flavors: Flavor[]; images: Image[]; networks: Network[] }>("GET", "/catalog"),
   listServers: (all = false) => request<{ servers: Server[] }>("GET", `/servers${all ? "?all=true" : ""}`),

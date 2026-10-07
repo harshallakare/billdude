@@ -30,6 +30,7 @@ import { createAccountService } from "../src/accounts.js";
 import { createGateway } from "../src/billing/gateway.js";
 import { createQueues } from "../src/jobs/queue.js";
 import { createWorkers } from "../src/jobs/worker.js";
+import { createMemoryMailer } from "../src/mail/mailer.js";
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/billdude_test";
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -59,6 +60,8 @@ export async function startStack(env: Record<string, string> = {}) {
     // Enough credit that tests unrelated to billing can create servers.
     BILLING_SIGNUP_CREDIT: "1000",
     AUTH_RATE_LIMIT: "1000",
+    REQUIRE_EMAIL_VERIFICATION: "false",
+    WEB_ORIGIN: "https://portal.test",
     ...env,
   });
 
@@ -71,7 +74,8 @@ export async function startStack(env: Record<string, string> = {}) {
   const accounts = createAccountService({ db, vhi, config });
   const gateway = createGateway(config);
   const app = await buildApp({ config, db, redis, queues, vhi, catalog, gateway });
-  const workers = createWorkers({ db, vhi, accounts, config, queues, connection: redis, prefix, pollMs: 10, concurrency: 5 });
+  const mailer = createMemoryMailer();
+  const workers = createWorkers({ db, vhi, accounts, config, queues, mailer, connection: redis, prefix, pollMs: 10, concurrency: 5 });
 
   const agentFor = (cookie: string) => {
     const call = async (method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", url: string, payload?: unknown) => {
@@ -102,6 +106,8 @@ export async function startStack(env: Record<string, string> = {}) {
     config,
     queues,
     gateway,
+    /** Emails "sent" by the worker. */
+    outbox: mailer.outbox,
     mock,
     anonymous: agentFor(""),
     async signUp(email: string, password = "correct-horse-battery") {
@@ -110,7 +116,9 @@ export async function startStack(env: Record<string, string> = {}) {
       return login(email, password);
     },
     async createAdmin(email = "admin@example.com", password = "admin-password-123") {
-      await db.insert(users).values({ email, name: "Admin", role: "admin", passwordHash: await hashPassword(password) });
+      await db
+        .insert(users)
+        .values({ email, name: "Admin", role: "admin", passwordHash: await hashPassword(password), emailVerifiedAt: new Date() });
       return login(email, password);
     },
     async userId(email: string) {
@@ -119,7 +127,7 @@ export async function startStack(env: Record<string, string> = {}) {
     },
     async stop() {
       await workers.close();
-      for (const queue of [queues.vm, queues.account, queues.billing]) {
+      for (const queue of Object.values(queues)) {
         await queue.obliterate({ force: true });
         await queue.close();
       }

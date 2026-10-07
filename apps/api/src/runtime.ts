@@ -38,7 +38,7 @@ export function createRuntime(config: Config) {
     accounts,
     gateway,
     async close() {
-      await Promise.all([queues.vm.close(), queues.account.close(), queues.billing.close()]);
+      await Promise.all(Object.values(queues).map((q) => q.close()));
       redis.disconnect();
       await pool.end();
     },

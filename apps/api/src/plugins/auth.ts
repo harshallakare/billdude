@@ -7,8 +7,10 @@
  *   app.get("/x", { preHandler: app.authenticate }, handler)    // any signed-in user
  *   app.get("/y", { preHandler: app.requireAdmin }, handler)    // admins only
  *
- * Inside handlers the signed-in user is `request.user` ({ id, email, role }).
- * The user row is re-read on every request so suspensions apply immediately.
+ * Inside handlers the signed-in user is `request.user` ({ id, email, role, emailVerified }).
+ * The user row is re-read on every request so suspensions apply immediately, and
+ * the token's session version must match the user's (bumped on password change),
+ * which signs out every other session.
  */
 import cookie from "@fastify/cookie";
 import jwt from "@fastify/jwt";
@@ -26,12 +28,13 @@ export interface SessionUser {
   email: string;
   name: string;
   role: "admin" | "customer";
+  emailVerified: boolean;
 }
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
-    payload: { sub: string };
-    user: SessionUser;
+    payload: { sub: string; sv: number };
+    user: SessionUser & { sv?: number };
   }
 }
 
@@ -41,7 +44,7 @@ declare module "fastify" {
     requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
   interface FastifyReply {
-    startSession: (userId: string) => Promise<void>;
+    startSession: (user: { id: string; sessionVersion: number }) => Promise<void>;
     endSession: () => void;
   }
 }
@@ -53,11 +56,14 @@ export const authPlugin = fp(async (app: FastifyInstance, opts: { db: Db; secret
     cookie: { cookieName: SESSION_COOKIE, signed: false },
     sign: { expiresIn: SESSION_TTL_SECONDS },
     // Resolve the full user from the token subject on every verify.
-    formatUser: (payload) => ({ id: (payload as { sub: string }).sub }) as SessionUser,
+    formatUser: (payload) => {
+      const p = payload as { sub: string; sv?: number };
+      return { id: p.sub, sv: p.sv ?? 0 } as SessionUser & { sv: number };
+    },
   });
 
-  app.decorateReply("startSession", async function (this: FastifyReply, userId: string) {
-    const token = await this.jwtSign({ sub: userId });
+  app.decorateReply("startSession", async function (this: FastifyReply, user: { id: string; sessionVersion: number }) {
+    const token = await this.jwtSign({ sub: user.id, sv: user.sessionVersion });
     this.setCookie(SESSION_COOKIE, token, {
       path: "/",
       httpOnly: true,
@@ -82,7 +88,11 @@ export const authPlugin = fp(async (app: FastifyInstance, opts: { db: Db; secret
       reply.endSession();
       return reply.code(401).send({ error: "Account is not active" });
     }
-    req.user = { id: user.id, email: user.email, name: user.name, role: user.role };
+    if ((req.user.sv ?? 0) !== user.sessionVersion) {
+      reply.endSession();
+      return reply.code(401).send({ error: "Your session has expired. Please sign in again." });
+    }
+    req.user = { id: user.id, email: user.email, name: user.name, role: user.role, emailVerified: user.emailVerifiedAt !== null };
   });
 
   app.decorate("requireAdmin", async (req: FastifyRequest, reply: FastifyReply) => {

@@ -54,8 +54,13 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
   (image → volume, `delete_on_termination`), with `VHI_VOLUME_TYPE` as storage policy.
 - Ownership checks live in `loadOwned()` in `routes/servers.ts`; customers get 404 (not 403)
   for other people's resources.
-- Sessions: JWT in httpOnly `bd_session` cookie (SameSite=Lax); the user row is re-read on
-  every request so suspensions apply immediately. Passwords: Argon2id.
+- Sessions: JWT in httpOnly `bd_session` cookie (SameSite=Lax) carrying `sv` (session
+  version); the user row is re-read on every request so suspensions apply immediately and a
+  password change/reset (which bumps `users.session_version`) kills other sessions.
+  Passwords: Argon2id. Emailed links use `auth/tokens.ts` (hashed, single-use, expiring).
+- **Email is queued**: enqueue with `enqueueMail(queues.mail, { to, ...templates.x(...) })`;
+  the worker sends via SMTP (`mail/mailer.ts`, logs instead when `SMTP_URL` is empty).
+  Tests read `stack.outbox`.
 - Security-relevant and billable actions call `audit()`.
 
 ## Conventions
@@ -106,7 +111,9 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
       support tickets for customers and staff
 - [x] Phase 5 (part) — Docker images (api/worker/web), production compose with Caddy HTTPS
       + security headers/CSP, docs/DEPLOYMENT.md, CI image build
-- [ ] Phase 5 (rest) — email (verification, password reset, notifications), CSRF tokens, 2FA, load tests
+- [x] Phase 5 (part) — email via queued SMTP: verification (required to create servers),
+      password reset/change with session invalidation, ticket + low-balance/overdue/stop notices
+- [ ] Phase 5 (rest) — CSRF tokens, 2FA, load tests
 
 ## Known gaps (deliberate for now)
 

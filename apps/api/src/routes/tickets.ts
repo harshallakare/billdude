@@ -16,6 +16,8 @@ import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
 import { servers, ticketMessages, tickets, users, type ticketStatus } from "../db/schema.js";
+import { enqueueMail } from "../jobs/queue.js";
+import { templates } from "../mail/templates.js";
 
 const createBody = z.object({
   subject: z.string().trim().min(3).max(200),
@@ -28,7 +30,9 @@ const adminQuery = z.object({ status: z.enum(["open", "answered", "closed"]).opt
 
 type TicketStatus = (typeof ticketStatus.enumValues)[number];
 
-export async function ticketRoutes(app: FastifyInstance, { db }: AppDeps) {
+export async function ticketRoutes(app: FastifyInstance, { db, queues, config }: AppDeps) {
+  const link = (id: string) => `${config.PUBLIC_URL.replace(/\/+$/, "")}/support/${id}`;
+
   async function loadVisible(req: FastifyRequest) {
     const { id } = idParams.parse(req.params);
     const [ticket] = await db.select().from(tickets).where(eq(tickets.id, id));
@@ -58,6 +62,9 @@ export async function ticketRoutes(app: FastifyInstance, { db }: AppDeps) {
       return t!;
     });
     await audit(db, { actorId: req.user.id, action: "ticket.create", targetType: "ticket", targetId: ticket.id });
+    for (const to of config.SUPPORT_NOTIFY_EMAILS) {
+      await enqueueMail(queues.mail, { to, ...templates.newTicket(`${req.user.name} <${req.user.email}>`, ticket.subject, link(ticket.id)) });
+    }
     return reply.code(201).send({ ticket });
   });
 
@@ -95,6 +102,12 @@ export async function ticketRoutes(app: FastifyInstance, { db }: AppDeps) {
       await tx.update(tickets).set({ status }).where(eq(tickets.id, ticket.id));
     });
     await audit(db, { actorId: req.user.id, action: "ticket.reply", targetType: "ticket", targetId: ticket.id });
+    if (fromStaff) {
+      const [customer] = await db.select().from(users).where(eq(users.id, ticket.userId));
+      if (customer) {
+        await enqueueMail(queues.mail, { to: customer.email, ...templates.ticketReply(customer.name, ticket.subject, link(ticket.id)) });
+      }
+    }
     return reply.code(201).send({ status });
   });
 
