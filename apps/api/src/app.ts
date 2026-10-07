@@ -16,7 +16,7 @@ import { VhiError, VhiQuotaError, type VhiConnector } from "@billdude/vhi-connec
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
 import { ZodError } from "zod";
-import type { PaymentGateway } from "./billing/gateway.js";
+import { GatewayError, type PaymentGateway } from "./billing/gateway.js";
 import type { Catalog } from "./catalog.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db/client.js";
@@ -61,6 +61,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.setErrorHandler((error, req, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({ error: "Invalid request", issues: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) });
+    }
+    if (error instanceof GatewayError) {
+      req.log.error({ err: error }, "Payment gateway call failed");
+      return reply.code(502).send({ error: "The payment provider is unavailable. Please try again shortly." });
     }
     if (error instanceof VhiQuotaError) {
       return reply.code(403).send({ error: "Your resource quota does not allow this." });

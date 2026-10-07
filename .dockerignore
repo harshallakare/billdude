@@ -1,0 +1,10 @@
+# .dockerignore
+# Usage: keeps local artefacts and secrets out of the Docker build context (see Dockerfile).
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!.env.example
+.git
+coverage
+*.log

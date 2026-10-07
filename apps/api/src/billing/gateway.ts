@@ -123,15 +123,20 @@ export class RazorpayGateway implements PaymentGateway {
   }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${this.keyId}:${this.keySecret}`).toString("base64")}`,
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(20_000),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${this.keyId}:${this.keySecret}`).toString("base64")}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (error) {
+      throw new GatewayError(`Razorpay ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`, 0);
+    }
     const data = (await res.json().catch(() => ({}))) as { error?: { description?: string } };
     if (!res.ok) throw new GatewayError(`Razorpay ${method} ${path}: ${data.error?.description ?? res.statusText}`, res.status);
     return data as T;

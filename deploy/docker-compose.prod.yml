@@ -1,0 +1,117 @@
+# deploy/docker-compose.prod.yml
+# Usage: production stack on a single Linux host with Docker.
+#   cp deploy/.env.production.example deploy/.env   # fill in secrets, DOMAIN, VHI and Razorpay settings
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env run --rm api node dist/scripts/seed-admin.js
+# Services: postgres, redis, migrate (one-shot, runs before api/worker), api, worker,
+# web (Caddy on :80/:443 with automatic HTTPS for $DOMAIN). See docs/DEPLOYMENT.md.
+name: billdude
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgres://billdude:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/billdude
+  REDIS_URL: redis://redis:6379
+  WEB_ORIGIN: https://${DOMAIN:?set DOMAIN}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+  VHI_AUTH_URL: ${VHI_AUTH_URL:?set VHI_AUTH_URL}
+  VHI_USERNAME: ${VHI_USERNAME:?set VHI_USERNAME}
+  VHI_PASSWORD: ${VHI_PASSWORD:?set VHI_PASSWORD}
+  VHI_USER_DOMAIN: ${VHI_USER_DOMAIN:-Default}
+  VHI_PROJECT_NAME: ${VHI_PROJECT_NAME:?set VHI_PROJECT_NAME}
+  VHI_PROJECT_DOMAIN: ${VHI_PROJECT_DOMAIN:-Default}
+  VHI_REGION: ${VHI_REGION:-}
+  VHI_VOLUME_TYPE: ${VHI_VOLUME_TYPE:-}
+  VHI_MEMBER_ROLE: ${VHI_MEMBER_ROLE:-member}
+  VHI_PROJECT_PREFIX: ${VHI_PROJECT_PREFIX:-billdude-}
+  VHI_ALLOWED_NETWORK_IDS: ${VHI_ALLOWED_NETWORK_IDS:-}
+  QUOTA_INSTANCES: ${QUOTA_INSTANCES:-5}
+  QUOTA_CORES: ${QUOTA_CORES:-10}
+  QUOTA_RAM_MB: ${QUOTA_RAM_MB:-20480}
+  QUOTA_VOLUMES: ${QUOTA_VOLUMES:-10}
+  QUOTA_GIGABYTES: ${QUOTA_GIGABYTES:-500}
+  BILLING_CURRENCY: ${BILLING_CURRENCY:-INR}
+  BILLING_VCPU_HOURLY: ${BILLING_VCPU_HOURLY:-0.60}
+  BILLING_RAM_GB_HOURLY: ${BILLING_RAM_GB_HOURLY:-0.30}
+  BILLING_STORAGE_GB_MONTHLY: ${BILLING_STORAGE_GB_MONTHLY:-6.00}
+  BILLING_SIGNUP_CREDIT: ${BILLING_SIGNUP_CREDIT:-0}
+  BILLING_GRACE_HOURS: ${BILLING_GRACE_HOURS:-24}
+  BILLING_MIN_TOPUP: ${BILLING_MIN_TOPUP:-100}
+  BILLING_MAX_TOPUP: ${BILLING_MAX_TOPUP:-100000}
+  BILLING_TIMEZONE: ${BILLING_TIMEZONE:-Asia/Kolkata}
+  BILLING_COMPANY_NAME: ${BILLING_COMPANY_NAME:-billdude}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:?set RAZORPAY_KEY_ID}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:?set RAZORPAY_KEY_SECRET}
+  RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+  SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: billdude
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: billdude
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billdude"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    build: { context: .., target: api }
+    image: billdude-api
+    environment: *app-env
+    command: ["node", "dist/db/migrate.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: billdude-api
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: { context: .., target: worker }
+    image: billdude-worker
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  web:
+    build: { context: .., target: web }
+    image: billdude-web
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddydata:/data
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:

@@ -286,6 +286,15 @@ describe("razorpay", () => {
     expect(ledger).toHaveLength(1);
   });
 
+  it("turns gateway outages into a 502 with a clear message", async () => {
+    const down = new RazorpayGateway("rzp_test_key", keySecret, webhookSecret, (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch);
+    await expect(down.createOrder({ amountMinor: 100, currency: "INR", receipt: "r" })).rejects.toMatchObject({
+      name: "GatewayError",
+    });
+  });
+
   it("rejects webhooks with a bad signature", async () => {
     const res = await stack.app.inject({
       method: "POST",
