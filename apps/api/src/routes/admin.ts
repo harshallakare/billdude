@@ -13,6 +13,7 @@ import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
 import { effectiveQuotas } from "../accounts.js";
+import { formatAmount } from "../billing/money.js";
 import { users } from "../db/schema.js";
 import { enqueueAccountOp } from "../jobs/queue.js";
 
@@ -34,11 +35,19 @@ export async function adminRoutes(app: FastifyInstance, { db, queues, config }: 
         status: users.status,
         vhiProjectId: users.vhiProjectId,
         quotas: users.quotas,
+        balanceMicros: users.balanceMicros,
+        overdueSince: users.overdueSince,
         createdAt: users.createdAt,
       })
       .from(users)
       .orderBy(desc(users.createdAt));
-    return { users: rows.map((u) => ({ ...u, effectiveQuotas: effectiveQuotas(u, config) })) };
+    return {
+      users: rows.map(({ balanceMicros, ...u }) => ({
+        ...u,
+        balance: formatAmount(balanceMicros),
+        effectiveQuotas: effectiveQuotas(u, config),
+      })),
+    };
   });
 
   app.patch("/admin/users/:id", { preHandler: app.requireAdmin }, async (req, reply) => {

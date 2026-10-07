@@ -19,7 +19,8 @@ import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
 import { computeUsage, effectiveQuotas, exceededQuota } from "../accounts.js";
-import { servers, sshKeys, users, type ServerRow, type ServerStatusValue } from "../db/schema.js";
+import { loadPriceBook } from "../billing/pricing.js";
+import { servers, sshKeys, users, type ServerRow, type ServerStatusValue, type User } from "../db/schema.js";
 import { enqueueVmOp } from "../jobs/queue.js";
 
 const createBody = z.object({
@@ -103,6 +104,10 @@ export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, 
       });
     }
 
+    const prices = await loadPriceBook(db, config);
+    const fundsError = checkFunds(owner!, prices.serverHourly(flavor, body.bootVolumeGb));
+    if (fundsError) return reply.code(402).send({ error: fundsError });
+
     const { sshKeyIds, ...serverFields } = body;
     const keys = sshKeyIds.length
       ? await db
@@ -114,7 +119,13 @@ export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, 
 
     const [row] = await db
       .insert(servers)
-      .values({ ...serverFields, ownerId: req.user.id, sshPublicKeys: keys.map((k) => k.publicKey) })
+      .values({
+        ...serverFields,
+        flavorVcpus: flavor.vcpus,
+        flavorRamMb: flavor.ramMb,
+        ownerId: req.user.id,
+        sshPublicKeys: keys.map((k) => k.publicKey),
+      })
       .returning();
     await audit(db, { actorId: req.user.id, action: "server.create", targetType: "server", targetId: row!.id, data: body });
     await enqueueVmOp(queues.vm, { serverId: row!.id, op: "create", actorId: req.user.id });
@@ -146,6 +157,11 @@ export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, 
 
   app.post("/servers/:id/actions", { preHandler: app.authenticate }, async (req, reply) => {
     const { action } = actionBody.parse(req.body);
+    if (action === "start") {
+      const [owner] = await db.select().from(users).where(eq(users.id, req.user.id));
+      const fundsError = checkFunds(owner!, 1);
+      if (fundsError) return reply.code(402).send({ error: fundsError });
+    }
     const result = await transition(req, action);
     return reply.code(result.code).send(result.body);
   });
@@ -164,6 +180,14 @@ export async function serverRoutes(app: FastifyInstance, { db, queues, catalog, 
     await audit(db, { actorId: req.user.id, action: "server.console", targetType: "server", targetId: row.id });
     return { url: await vhi.project(row.vhiProjectId).getConsoleUrl(row.vhiServerId) };
   });
+}
+
+/** Customers need a positive balance covering at least an hour of the server, and no overdue balance. Admins are exempt. */
+function checkFunds(user: User, hourlyMicros: number): string | null {
+  if (user.role === "admin") return null;
+  if (user.overdueSince) return "Your account balance is overdue. Add funds to your wallet to continue.";
+  if (user.balanceMicros < hourlyMicros) return "Add funds to your wallet to create or start servers.";
+  return null;
 }
 
 function toDto(row: ServerRow) {

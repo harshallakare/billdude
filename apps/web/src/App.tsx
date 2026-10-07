@@ -7,17 +7,21 @@
  *   /servers/new               create wizard
  *   /servers/:id               detail + power actions + console
  *   /ssh-keys                  SSH key manager
+ *   /billing                   wallet, top-ups, transactions
+ *   /billing/statements/:month monthly usage statement
  */
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { useCurrentUser } from "./lib/auth";
+import { BillingPage } from "./pages/Billing";
 import { CreateServerPage } from "./pages/CreateServer";
 import { LoginPage } from "./pages/Login";
 import { RegisterPage } from "./pages/Register";
 import { ServerDetailPage } from "./pages/ServerDetail";
 import { ServersPage } from "./pages/Servers";
 import { SshKeysPage } from "./pages/SshKeys";
+import { StatementPage } from "./pages/Statement";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useCurrentUser();
@@ -43,6 +47,8 @@ export function App() {
         <Route path="/servers/new" element={<CreateServerPage />} />
         <Route path="/servers/:id" element={<ServerDetailPage />} />
         <Route path="/ssh-keys" element={<SshKeysPage />} />
+        <Route path="/billing" element={<BillingPage />} />
+        <Route path="/billing/statements/:month" element={<StatementPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/servers" replace />} />
     </Routes>

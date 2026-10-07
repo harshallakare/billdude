@@ -9,7 +9,7 @@
  *   await db.select().from(servers).where(eq(servers.ownerId, userId));
  */
 import type { ProjectQuotas } from "@billdude/vhi-connector";
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { bigint, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["admin", "customer"]);
 export const userStatus = pgEnum("user_status", ["active", "suspended"]);
@@ -42,6 +42,10 @@ export const users = pgTable("users", {
   vhiProjectId: text("vhi_project_id"),
   /** Admin override of the default quotas; null = use defaults from config. */
   quotas: jsonb("quotas").$type<ProjectQuotas>(),
+  /** Prepaid wallet balance in micro-units of the billing currency (1 INR = 1_000_000). */
+  balanceMicros: bigint("balance_micros", { mode: "number" }).notNull().default(0),
+  /** Set when the balance first went negative; cleared when it is topped up again. */
+  overdueSince: timestamp("overdue_since", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -58,6 +62,9 @@ export const servers = pgTable(
     /** Nova server id; null until the create call has succeeded. */
     vhiServerId: text("vhi_server_id").unique(),
     flavorId: text("flavor_id").notNull(),
+    /** Flavor size copied at create time so billing still works if the flavor is later removed. */
+    flavorVcpus: integer("flavor_vcpus").notNull().default(0),
+    flavorRamMb: integer("flavor_ram_mb").notNull().default(0),
     imageId: text("image_id").notNull(),
     networkId: text("network_id").notNull(),
     bootVolumeGb: integer("boot_volume_gb").notNull(),
@@ -67,6 +74,10 @@ export const servers = pgTable(
     /** Last error or provider fault shown to the customer. */
     statusMessage: text("status_message"),
     ipv4: text("ipv4"),
+    /** When the VM first became active; billing starts here. */
+    billingStartedAt: timestamp("billing_started_at", { withTimezone: true }),
+    /** Usage has been charged up to this instant. */
+    billedUntil: timestamp("billed_until", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
@@ -92,6 +103,84 @@ export const sshKeys = pgTable(
   (t) => [unique("ssh_keys_owner_fingerprint_unique").on(t.ownerId, t.fingerprint)],
 );
 
+export const walletTxType = pgEnum("wallet_tx_type", ["topup", "usage", "credit", "adjustment", "refund"]);
+export const paymentStatus = pgEnum("payment_status", ["created", "paid", "failed"]);
+
+/** Admin price overrides per flavor; flavors without a row use the vCPU/RAM formula. */
+export const flavorPrices = pgTable("flavor_prices", {
+  flavorId: text("flavor_id").primaryKey(),
+  hourlyMicros: bigint("hourly_micros", { mode: "number" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+/** Append-only wallet ledger. amount > 0 credits the wallet, < 0 debits it. */
+export const walletTransactions = pgTable(
+  "wallet_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    type: walletTxType("type").notNull(),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
+    balanceAfterMicros: bigint("balance_after_micros", { mode: "number" }).notNull(),
+    description: text("description").notNull(),
+    /** Idempotency key, e.g. a payment id; unique per type. */
+    reference: text("reference"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("wallet_tx_user_idx").on(t.userId, t.createdAt), unique("wallet_tx_type_reference_unique").on(t.type, t.reference)],
+);
+
+/** Per-server usage charged in one metering run. */
+export const usageRecords = pgTable(
+  "usage_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => servers.id),
+    walletTransactionId: uuid("wallet_transaction_id").references(() => walletTransactions.id),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    flavorId: text("flavor_id").notNull(),
+    diskGb: integer("disk_gb").notNull(),
+    computeMicros: bigint("compute_micros", { mode: "number" }).notNull(),
+    storageMicros: bigint("storage_micros", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("usage_records_user_period_idx").on(t.userId, t.periodStart)],
+);
+
+/** Wallet top-ups through the payment gateway. */
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    gateway: text("gateway").notNull(),
+    /** Gateway order id (Razorpay order_…). */
+    orderId: text("order_id").notNull().unique(),
+    /** Gateway payment id once paid (Razorpay pay_…). */
+    paymentId: text("payment_id"),
+    /** Amount in the currency's minor unit (paise), as the gateway expects. */
+    amountMinor: integer("amount_minor").notNull(),
+    currency: text("currency").notNull(),
+    status: paymentStatus("status").notNull().default("created"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+  },
+  (t) => [index("payments_user_idx").on(t.userId, t.createdAt)],
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {
@@ -109,5 +198,7 @@ export const auditLogs = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type SshKey = typeof sshKeys.$inferSelect;
+export type WalletTransaction = typeof walletTransactions.$inferSelect;
+export type Payment = typeof payments.$inferSelect;
 export type ServerRow = typeof servers.$inferSelect;
 export type ServerStatusValue = (typeof serverStatus.enumValues)[number];

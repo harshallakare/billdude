@@ -10,11 +10,16 @@
  */
 import { z } from "zod";
 
+/** A non-negative decimal amount such as "12" or "0.75" (validated, kept as a string for exact parsing). */
+const decimalString = z.string().regex(/^\d+(\.\d{1,6})?$/, "must be a decimal amount like 0.75");
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   API_PORT: z.coerce.number().int().positive().default(4000),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+  /** Max register/login attempts per IP per minute. */
+  AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   VHI_AUTH_URL: z.string().url(),
@@ -40,6 +45,30 @@ const schema = z.object({
   QUOTA_RAM_MB: z.coerce.number().int().min(-1).default(20480),
   QUOTA_VOLUMES: z.coerce.number().int().min(-1).default(10),
   QUOTA_GIGABYTES: z.coerce.number().int().min(-1).default(500),
+
+  /* ---- Billing ---- */
+  BILLING_CURRENCY: z.string().length(3).default("INR"),
+  /** Default compute prices (decimal, in BILLING_CURRENCY) used for flavors without an admin price. */
+  BILLING_VCPU_HOURLY: decimalString.default("0.60"),
+  BILLING_RAM_GB_HOURLY: decimalString.default("0.30"),
+  /** Boot-volume storage price per GB per month (charged per second, 730 h = 1 month). */
+  BILLING_STORAGE_GB_MONTHLY: decimalString.default("6.00"),
+  /** Free credit given to every new customer (decimal). */
+  BILLING_SIGNUP_CREDIT: decimalString.default("0"),
+  /** Hours a customer may stay below zero before their running servers are stopped. */
+  BILLING_GRACE_HOURS: z.coerce.number().min(0).default(24),
+  /** Allowed top-up range (whole currency units). */
+  BILLING_MIN_TOPUP: z.coerce.number().int().positive().default(100),
+  BILLING_MAX_TOPUP: z.coerce.number().int().positive().default(100000),
+  /** Time zone used to cut monthly statements. */
+  BILLING_TIMEZONE: z.string().default("Asia/Kolkata"),
+
+  /* ---- Razorpay (leave empty in development to use the built-in fake gateway) ---- */
+  RAZORPAY_KEY_ID: z.string().optional().transform((v) => v || undefined),
+  RAZORPAY_KEY_SECRET: z.string().optional().transform((v) => v || undefined),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional().transform((v) => v || undefined),
+  /** Business name shown in the Razorpay checkout. */
+  BILLING_COMPANY_NAME: z.string().default("billdude"),
 });
 
 export type Config = z.infer<typeof schema>;
@@ -50,7 +79,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const problems = result.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid configuration:\n${problems}`);
   }
-  return result.data;
+  const config = result.data;
+  if (config.NODE_ENV === "production" && !(config.RAZORPAY_KEY_ID && config.RAZORPAY_KEY_SECRET)) {
+    throw new Error("Invalid configuration:\n  - RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required in production");
+  }
+  return config;
 }
 
 /** Connector options derived from config. */

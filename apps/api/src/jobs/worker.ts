@@ -3,7 +3,7 @@
  *
  * Usage: wires the job processors to BullMQ workers (one per queue).
  *
- *   const workers = createWorkers({ db, vhi, accounts, connection: redis });
+ *   const workers = createWorkers({ db, vhi, accounts, config, queues, connection: redis });
  *   ...
  *   await workers.close();     // graceful shutdown
  *
@@ -11,10 +11,22 @@
  */
 import { Worker } from "bullmq";
 import type { Redis } from "ioredis";
+import { runBillingTick } from "../billing/metering.js";
+import type { Config } from "../config.js";
 import { createProcessors, markJobFailed, type ProcessorDeps } from "./processor.js";
-import { ACCOUNT_QUEUE, VM_QUEUE, type AccountJobData, type VmJobData } from "./queue.js";
+import {
+  ACCOUNT_QUEUE,
+  BILLING_QUEUE,
+  VM_QUEUE,
+  type AccountJobData,
+  type BillingJobData,
+  type Queues,
+  type VmJobData,
+} from "./queue.js";
 
-export function createWorkers(deps: ProcessorDeps & { connection: Redis; prefix?: string; concurrency?: number }) {
+export function createWorkers(
+  deps: ProcessorDeps & { config: Config; queues: Queues; connection: Redis; prefix?: string; concurrency?: number },
+) {
   const { processVmJob, processAccountJob } = createProcessors(deps);
   const common = { connection: deps.connection, ...(deps.prefix ? { prefix: deps.prefix } : {}) };
 
@@ -34,11 +46,18 @@ export function createWorkers(deps: ProcessorDeps & { connection: Redis; prefix?
     concurrency: 5,
   });
 
+  const billing = new Worker<BillingJobData>(
+    BILLING_QUEUE,
+    async () => runBillingTick({ db: deps.db, config: deps.config, queues: deps.queues }),
+    { ...common, concurrency: 1 },
+  );
+
   return {
     vm,
     account,
+    billing,
     async close() {
-      await Promise.all([vm.close(), account.close()]);
+      await Promise.all([vm.close(), account.close(), billing.close()]);
     },
   };
 }

@@ -25,6 +25,7 @@ export function CreateServerPage() {
     sshKeyIds: [],
   });
   const keys = useQuery({ queryKey: ["ssh-keys"], queryFn: api.listSshKeys });
+  const pricing = useQuery({ queryKey: ["pricing"], queryFn: api.pricing, staleTime: 60_000 });
 
   // Pre-select the first option of each list once the catalog loads.
   useEffect(() => {
@@ -45,6 +46,14 @@ export function CreateServerPage() {
     },
   });
 
+  const priceOf = (flavorId: string) => pricing.data?.flavors.find((p) => p.flavorId === flavorId);
+  const estimate = (() => {
+    const flavor = priceOf(form.flavorId);
+    if (!flavor || !pricing.data) return null;
+    const storageMonthly = Number(pricing.data.storageGbMonthly) * form.bootVolumeGb;
+    const monthly = Number(flavor.monthly) + storageMonthly;
+    return { hourly: (monthly / 730).toFixed(2), monthly: monthly.toFixed(2) };
+  })();
   const image = catalog.data?.images.find((i) => i.id === form.imageId);
   const minDisk = Math.max(10, image?.minDiskGb ?? 0);
 
@@ -84,6 +93,7 @@ export function CreateServerPage() {
               {catalog.data?.flavors.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name} — {f.vcpus} vCPU, {(f.ramMb / 1024).toFixed(f.ramMb % 1024 ? 1 : 0)} GB RAM
+                  {priceOf(f.id) && ` — ${pricing.data!.currency} ${priceOf(f.id)!.monthly}/mo`}
                 </option>
               ))}
             </Select>
@@ -141,6 +151,12 @@ export function CreateServerPage() {
             </div>
           </Field>
 
+          {estimate && (
+            <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              Estimated cost: <strong>{pricing.data!.currency} {estimate.hourly}/hour</strong> (about {pricing.data!.currency}{" "}
+              {estimate.monthly}/month), billed per second from your wallet.
+            </p>
+          )}
           <ErrorText error={create.error} />
           <div className="flex justify-end gap-3">
             <Button type="button" variant="secondary" onClick={() => navigate("/servers")}>

@@ -32,6 +32,19 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
   `vhi.project(id)` for server calls. Registration enqueues an `account-ops` provision job.
 - **Quotas are enforced twice**: a friendly portal check (`exceededQuota` in `accounts.ts`)
   and VHI's own Nova/Cinder quotas (`VhiQuotaError` → job fails with a clear message).
+- **Money is integer micro-units** (`balance_micros`, 1 INR = 1_000_000) — see
+  `billing/money.ts`. Convert to paise only for Razorpay, to strings only in responses.
+- **Only `billing/ledger.ts#postTransaction` changes a balance**; it writes the ledger row
+  in the same transaction and maintains `users.overdue_since`. Use a `reference` for
+  anything that must not be applied twice (payment ids, signup credit).
+- **Metering** (`billing/metering.ts`, hourly `billing-ops` job): servers are billed per
+  second from `billing_started_at` (first ACTIVE) to `deleted_at`, advancing
+  `billed_until` with a guarded UPDATE. Overdue customers past `BILLING_GRACE_HOURS` get
+  running servers stopped, never deleted. Creating/starting servers needs funds (402).
+- **Payments**: `billing/gateway.ts` (Razorpay, or the fake gateway when keys are unset —
+  refused in production). `billing/payments.ts#settlePayment` verifies amount/currency
+  against our order, captures if needed and credits exactly once. Webhook verifies the
+  raw-body HMAC.
 - **Only `packages/vhi-connector` imports OpenStack shapes.** Everything else uses the
   domain types in `src/types.ts`. A new cloud backend = a new `VhiConnector` implementation.
 - **VHI boots VMs from volumes**: `createServer` always sends `block_device_mapping_v2`
@@ -75,7 +88,9 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 - [x] Phase 1 — SSH keys via cloud-init; per-customer VHI projects + quotas; network allow-list
 - [ ] Phase 1 (rest) — volumes, floating IPs, security groups, snapshots; test against a real VHI cluster
 - [ ] Phase 2 — portal polish: dashboard, SSH key manager, embedded noVNC
-- [ ] Phase 3 — billing: plans/pricing, hourly usage metering, prepaid wallet, invoices, Razorpay
+- [x] Phase 3 (core) — pricing (formula + per-flavor overrides), per-second metering, prepaid
+      wallet + ledger, Razorpay top-ups + webhook, monthly statements, non-payment stop
+- [ ] Phase 3 (rest) — GST tax invoices, low-balance emails, auto-recharge, coupons
 - [ ] Phase 4 — admin: customer mgmt, suspend-on-non-payment, tickets, audit viewer
 - [ ] Phase 5 — hardening: CSRF tokens, 2FA, email verification, load tests, Docker images, deploy
 

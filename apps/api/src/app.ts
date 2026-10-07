@@ -4,7 +4,7 @@
  * Usage: builds the Fastify application from explicit dependencies, so the
  * same function serves production (src/main.ts) and tests:
  *
- *   const app = await buildApp({ config, db, redis, queues, vhi, catalog });
+ *   const app = await buildApp({ config, db, redis, queues, vhi, catalog, gateway });
  *   await app.listen({ port: config.API_PORT });
  *   // tests: await app.inject({ method: "GET", url: "/api/health" })
  *
@@ -16,13 +16,16 @@ import { VhiError, VhiQuotaError, type VhiConnector } from "@billdude/vhi-connec
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
 import { ZodError } from "zod";
+import type { PaymentGateway } from "./billing/gateway.js";
 import type { Catalog } from "./catalog.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db/client.js";
 import type { Queues } from "./jobs/queue.js";
 import { authPlugin } from "./plugins/auth.js";
 import { accountRoutes } from "./routes/account.js";
+import { adminBillingRoutes } from "./routes/admin-billing.js";
 import { adminRoutes } from "./routes/admin.js";
+import { billingRoutes } from "./routes/billing.js";
 import { authRoutes } from "./routes/auth.js";
 import { catalogRoutes } from "./routes/catalog.js";
 import { healthRoutes } from "./routes/health.js";
@@ -36,6 +39,7 @@ export interface AppDeps {
   queues: Queues;
   vhi: VhiConnector;
   catalog: Catalog;
+  gateway: PaymentGateway;
 }
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
@@ -79,7 +83,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await serverRoutes(api, deps);
       await sshKeyRoutes(api, deps);
       await accountRoutes(api, deps);
+      await billingRoutes(api, deps);
       await adminRoutes(api, deps);
+      await adminBillingRoutes(api, deps);
     },
     { prefix: "/api" },
   );

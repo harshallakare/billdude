@@ -12,6 +12,7 @@
 import { createVhiConnector } from "@billdude/vhi-connector";
 import { Redis } from "ioredis";
 import { createAccountService } from "./accounts.js";
+import { createGateway } from "./billing/gateway.js";
 import { createCatalog } from "./catalog.js";
 import { vhiOptions, type Config } from "./config.js";
 import { createDb } from "./db/client.js";
@@ -25,6 +26,7 @@ export function createRuntime(config: Config) {
   const vhi = createVhiConnector(vhiOptions(config));
   const catalog = createCatalog(vhi, { allowedNetworkIds: config.VHI_ALLOWED_NETWORK_IDS });
   const accounts = createAccountService({ db, vhi, config });
+  const gateway = createGateway(config);
 
   return {
     config,
@@ -34,8 +36,9 @@ export function createRuntime(config: Config) {
     vhi,
     catalog,
     accounts,
+    gateway,
     async close() {
-      await Promise.all([queues.vm.close(), queues.account.close()]);
+      await Promise.all([queues.vm.close(), queues.account.close(), queues.billing.close()]);
       redis.disconnect();
       await pool.end();
     },

@@ -74,7 +74,9 @@ export function createProcessors(deps: ProcessorDeps) {
       return;
     }
     const ipv4 = vm?.addresses.find((a) => a.version === 4)?.ip ?? row.ipv4;
-    await update(row.id, { status: ok, statusMessage: null, ipv4 });
+    // Billing starts the first time the VM is up.
+    const billingStartedAt = row.billingStartedAt ?? (ok === "active" ? new Date() : null);
+    await update(row.id, { status: ok, statusMessage: null, ipv4, billingStartedAt });
   }
 
   async function create(row: ServerRow): Promise<void> {

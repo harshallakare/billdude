@@ -27,6 +27,7 @@ import { createDb } from "../src/db/client.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { users } from "../src/db/schema.js";
 import { createAccountService } from "../src/accounts.js";
+import { createGateway } from "../src/billing/gateway.js";
 import { createQueues } from "../src/jobs/queue.js";
 import { createWorkers } from "../src/jobs/worker.js";
 
@@ -55,6 +56,9 @@ export async function startStack(env: Record<string, string> = {}) {
     VHI_USERNAME: "admin",
     VHI_PASSWORD: "admin",
     VHI_PROJECT_NAME: "billdude",
+    // Enough credit that tests unrelated to billing can create servers.
+    BILLING_SIGNUP_CREDIT: "1000",
+    AUTH_RATE_LIMIT: "1000",
     ...env,
   });
 
@@ -65,8 +69,9 @@ export async function startStack(env: Record<string, string> = {}) {
   const vhi = createVhiConnector(vhiOptions(config));
   const catalog = createCatalog(vhi, { allowedNetworkIds: config.VHI_ALLOWED_NETWORK_IDS });
   const accounts = createAccountService({ db, vhi, config });
-  const app = await buildApp({ config, db, redis, queues, vhi, catalog });
-  const workers = createWorkers({ db, vhi, accounts, connection: redis, prefix, pollMs: 10, concurrency: 5 });
+  const gateway = createGateway(config);
+  const app = await buildApp({ config, db, redis, queues, vhi, catalog, gateway });
+  const workers = createWorkers({ db, vhi, accounts, config, queues, connection: redis, prefix, pollMs: 10, concurrency: 5 });
 
   const agentFor = (cookie: string) => {
     const call = async (method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", url: string, payload?: unknown) => {
@@ -95,6 +100,8 @@ export async function startStack(env: Record<string, string> = {}) {
     vhi,
     accounts,
     config,
+    queues,
+    gateway,
     mock,
     anonymous: agentFor(""),
     async signUp(email: string, password = "correct-horse-battery") {
@@ -112,7 +119,7 @@ export async function startStack(env: Record<string, string> = {}) {
     },
     async stop() {
       await workers.close();
-      for (const queue of [queues.vm, queues.account]) {
+      for (const queue of [queues.vm, queues.account, queues.billing]) {
         await queue.obliterate({ force: true });
         await queue.close();
       }

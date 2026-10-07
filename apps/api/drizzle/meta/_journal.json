@@ -22,6 +22,13 @@
       "when": 1791360613701,
       "tag": "0002_customer_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791360956376,
+      "tag": "0003_billing",
+      "breakpoints": true
     }
   ]
 }

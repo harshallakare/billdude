@@ -15,6 +15,8 @@ import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
 import { DUMMY_HASH, hashPassword, verifyPassword } from "../auth/password.js";
 import { users } from "../db/schema.js";
+import { postTransaction } from "../billing/ledger.js";
+import { parseAmount } from "../billing/money.js";
 import { enqueueAccountOp } from "../jobs/queue.js";
 
 const registerBody = z.object({
@@ -28,9 +30,8 @@ const loginBody = z.object({
   password: z.string().min(1).max(200),
 });
 
-const strictLimit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
-
-export async function authRoutes(app: FastifyInstance, { db, queues }: AppDeps) {
+export async function authRoutes(app: FastifyInstance, { db, queues, config }: AppDeps) {
+  const strictLimit = { rateLimit: { max: config.AUTH_RATE_LIMIT, timeWindow: "1 minute" } };
   app.post("/auth/register", { config: strictLimit }, async (req, reply) => {
     const body = registerBody.parse(req.body);
     const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, body.email));
@@ -41,6 +42,16 @@ export async function authRoutes(app: FastifyInstance, { db, queues }: AppDeps) 
       .values({ email: body.email, name: body.name, passwordHash: await hashPassword(body.password) })
       .returning();
     await audit(db, { actorId: user!.id, action: "user.register", targetType: "user", targetId: user!.id });
+    const signupCredit = parseAmount(config.BILLING_SIGNUP_CREDIT);
+    if (signupCredit > 0) {
+      await postTransaction(db, {
+        userId: user!.id,
+        type: "credit",
+        amountMicros: signupCredit,
+        description: "Welcome credit",
+        reference: `signup:${user!.id}`,
+      });
+    }
     // Create the customer's VHI project in the background so their first server starts faster.
     await enqueueAccountOp(queues.account, { userId: user!.id, op: "provision" });
     await reply.startSession(user!.id);

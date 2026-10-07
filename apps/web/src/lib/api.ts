@@ -85,6 +85,53 @@ export interface Quotas {
   gigabytes: number;
 }
 
+export interface Wallet {
+  currency: string;
+  balance: string;
+  hourlyBurn: string;
+  runwayHours: number | null;
+  overdueSince: string | null;
+  graceHours: number;
+  minTopup: number;
+  maxTopup: number;
+  gateway: "razorpay" | "fake";
+}
+
+export interface WalletTransaction {
+  id: string;
+  type: "topup" | "usage" | "credit" | "adjustment" | "refund";
+  amount: string;
+  balanceAfter: string;
+  description: string;
+  createdAt: string;
+}
+
+export interface TopupOrder {
+  gateway: "razorpay" | "fake";
+  keyId: string | null;
+  orderId: string;
+  amountMinor: number;
+  currency: string;
+  companyName: string;
+  prefill: { name: string; email: string };
+}
+
+export interface Pricing {
+  currency: string;
+  storageGbMonthly: string;
+  flavors: { flavorId: string; hourly: string; monthly: string }[];
+}
+
+export interface Statement {
+  month: string;
+  currency: string;
+  openingBalance: string;
+  closingBalance: string;
+  usageTotal: string;
+  lines: { serverId: string; name: string; flavorId: string; diskGb: number; hours: number; compute: string; storage: string; total: string }[];
+  payments: { type: string; amount: string; description: string; createdAt: string }[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -127,6 +174,15 @@ export const api = {
   consoleUrl: (id: string) => request<{ url: string }>("GET", `/servers/${id}/console`),
 
   quotas: () => request<{ limits: Quotas; usage: Quotas }>("GET", "/account/quotas"),
+
+  wallet: () => request<Wallet>("GET", "/billing/wallet"),
+  transactions: () => request<{ currency: string; transactions: WalletTransaction[] }>("GET", "/billing/transactions"),
+  pricing: () => request<Pricing>("GET", "/billing/pricing"),
+  createTopup: (amount: number) => request<TopupOrder>("POST", "/billing/topups", { amount }),
+  verifyTopup: (orderId: string, paymentId: string, signature: string) =>
+    request<{ status: string; balance: string; currency: string }>("POST", "/billing/topups/verify", { orderId, paymentId, signature }),
+  statements: () => request<{ currency: string; statements: { month: string; usage: string }[] }>("GET", "/billing/statements"),
+  statement: (month: string) => request<Statement>("GET", `/billing/statements/${month}`),
 
   listSshKeys: () => request<{ sshKeys: SshKey[] }>("GET", "/ssh-keys"),
   addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),
