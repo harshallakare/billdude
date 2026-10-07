@@ -70,6 +70,12 @@ admins manage customers. Billing (Razorpay first) lands in phase 3.
   header to the new SQL file → `pnpm db:migrate`. Never edit an applied migration.
 - Tests are integration-first: real Postgres + Redis + mock VHI (`apps/api/test/helpers.ts`).
 
+## Deployment
+
+`Dockerfile` (targets `api`, `worker`, `web`) + `deploy/docker-compose.prod.yml` + `deploy/Caddyfile`.
+Walkthrough in `docs/DEPLOYMENT.md`. The `web` image is Caddy serving `apps/web/dist` and
+proxying `/api` — keep the CSP in the Caddyfile in sync if the portal loads new origins.
+
 ## Commands
 
 ```bash
@@ -98,7 +104,9 @@ and `REDIS_URL`. `pnpm build` must run before tests (packages are consumed from 
 - [ ] Phase 3 (rest) — GST tax invoices, low-balance emails, auto-recharge, coupons
 - [x] Phase 4 — admin area (overview, customers: suspend/quotas/wallet, pricing, audit log),
       support tickets for customers and staff
-- [ ] Phase 5 — hardening: CSRF tokens, 2FA, email verification, load tests, Docker images, deploy
+- [x] Phase 5 (part) — Docker images (api/worker/web), production compose with Caddy HTTPS
+      + security headers/CSP, docs/DEPLOYMENT.md, CI image build
+- [ ] Phase 5 (rest) — email (verification, password reset, notifications), CSRF tokens, 2FA, load tests
 
 ## Known gaps (deliberate for now)
 

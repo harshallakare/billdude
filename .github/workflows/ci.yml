@@ -1,6 +1,7 @@
 # .github/workflows/ci.yml
 # Usage: GitHub Actions CI. Runs on every push and pull request:
-# install -> build -> lint -> typecheck -> tests (with Postgres and Redis service containers).
+# install -> build -> lint -> typecheck -> tests (with Postgres and Redis service containers),
+# plus a job that builds the production Docker images.
 name: CI
 
 on:
@@ -40,3 +41,15 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+
+  docker:
+    # Builds the production images so a broken Dockerfile is caught before deploy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build images
+        run: |
+          for target in api worker web; do
+            docker buildx build --target "$target" --cache-from type=gha --cache-to type=gha,mode=max -t "billdude-$target" .
+          done

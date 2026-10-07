@@ -9,9 +9,10 @@ let customers sign up, launch and manage VMs on your VHI cluster, and (soon) pay
 
 ## Status
 
-Phase 0 + core of phase 1: customer sign-up/login, admin role, VM create / start / stop /
-reboot / delete / console against VHI's OpenStack-compatible APIs, background provisioning
-worker, and a mock VHI so everything runs without a cluster. Billing is next.
+Customer portal (servers, SSH keys, firewall, billing, support), admin area (customers,
+quotas, pricing, tickets, audit), one VHI project per customer with quotas, prepaid INR
+wallet with per-second metering and Razorpay top-ups, and a mock VHI so everything runs
+without a cluster.
 See [CLAUDE.md](CLAUDE.md) for architecture and the roadmap.
 
 ## Quick start
@@ -37,6 +38,12 @@ Open http://localhost:5173 and register, or sign in as the admin.
 | Mock VHI (Keystone) | http://localhost:5050/identity/v3 |
 
 In the mock, any server whose name contains `fail` ends in ERROR — handy for testing the UI.
+
+## Deploying
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): Docker Compose stack (Postgres, Redis, API,
+worker, Caddy with automatic HTTPS), VHI service-account setup, Razorpay webhook,
+backups and troubleshooting.
 
 ## Connecting a real VHI cluster
 
