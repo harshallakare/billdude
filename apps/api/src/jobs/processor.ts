@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { audit } from "../audit.js";
 import type { Db } from "../db/client.js";
 import { servers, type ServerRow, type ServerStatusValue } from "../db/schema.js";
+import { buildCloudInit } from "../ssh.js";
 import type { VmJobData } from "./queue.js";
 
 export interface ProcessorDeps {
@@ -78,6 +79,7 @@ export function createVmProcessor(deps: ProcessorDeps) {
             imageId: row.imageId,
             networkId: row.networkId,
             bootVolumeGb: row.bootVolumeGb,
+            userData: buildCloudInit(row.sshPublicKeys),
             metadata: { [SERVER_TAG]: row.id, [ACCOUNT_TAG]: row.ownerId },
           })
         ).id;

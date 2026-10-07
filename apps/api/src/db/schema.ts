@@ -8,7 +8,7 @@
  *   import { users, servers } from "./db/schema.js";
  *   await db.select().from(servers).where(eq(servers.ownerId, userId));
  */
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["admin", "customer"]);
 export const userStatus = pgEnum("user_status", ["active", "suspended"]);
@@ -54,6 +54,8 @@ export const servers = pgTable(
     imageId: text("image_id").notNull(),
     networkId: text("network_id").notNull(),
     bootVolumeGb: integer("boot_volume_gb").notNull(),
+    /** Public keys copied from the customer's SSH keys at create time (injected via cloud-init). */
+    sshPublicKeys: jsonb("ssh_public_keys").$type<string[]>().notNull().default([]),
     status: serverStatus("status").notNull().default("pending"),
     /** Last error or provider fault shown to the customer. */
     statusMessage: text("status_message"),
@@ -66,6 +68,21 @@ export const servers = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => [index("servers_owner_idx").on(t.ownerId)],
+);
+
+export const sshKeys = pgTable(
+  "ssh_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    publicKey: text("public_key").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("ssh_keys_owner_fingerprint_unique").on(t.ownerId, t.fingerprint)],
 );
 
 export const auditLogs = pgTable(
@@ -84,5 +101,6 @@ export const auditLogs = pgTable(
 );
 
 export type User = typeof users.$inferSelect;
+export type SshKey = typeof sshKeys.$inferSelect;
 export type ServerRow = typeof servers.$inferSelect;
 export type ServerStatusValue = (typeof serverStatus.enumValues)[number];

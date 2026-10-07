@@ -3,7 +3,7 @@
  *
  * Usage: customer VM endpoints (mounted under /api, signed-in users):
  *   GET    /servers                 -> own servers (admins: ?all=true for everyone's)
- *   POST   /servers                 -> { name, flavorId, imageId, networkId, bootVolumeGb } queue a create
+ *   POST   /servers                 -> { name, flavorId, imageId, networkId, bootVolumeGb, sshKeyIds? } queue a create
  *   GET    /servers/:id             -> one server
  *   POST   /servers/:id/actions     -> { action: "start" | "stop" | "reboot" }
  *   DELETE /servers/:id             -> queue deletion
@@ -18,7 +18,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppDeps } from "../app.js";
 import { audit } from "../audit.js";
-import { servers, type ServerRow, type ServerStatusValue } from "../db/schema.js";
+import { servers, sshKeys, type ServerRow, type ServerStatusValue } from "../db/schema.js";
 import { enqueueVmOp } from "../jobs/queue.js";
 
 /** Soft limit until per-plan quotas arrive with billing. */
@@ -33,6 +33,7 @@ const createBody = z.object({
   imageId: z.string().min(1),
   networkId: z.string().min(1),
   bootVolumeGb: z.number().int().min(10).max(2000),
+  sshKeyIds: z.array(z.string().uuid()).max(10).default([]),
 });
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -88,9 +89,18 @@ export async function serverRoutes(app: FastifyInstance, { db, queue, catalog, v
       return reply.code(403).send({ error: `You can have at most ${MAX_SERVERS_PER_CUSTOMER} servers` });
     }
 
+    const { sshKeyIds, ...serverFields } = body;
+    const keys = sshKeyIds.length
+      ? await db
+          .select()
+          .from(sshKeys)
+          .where(and(eq(sshKeys.ownerId, req.user.id), inArray(sshKeys.id, sshKeyIds)))
+      : [];
+    if (keys.length !== new Set(sshKeyIds).size) return reply.code(400).send({ error: "Unknown SSH key" });
+
     const [row] = await db
       .insert(servers)
-      .values({ ...body, ownerId: req.user.id })
+      .values({ ...serverFields, ownerId: req.user.id, sshPublicKeys: keys.map((k) => k.publicKey) })
       .returning();
     await audit(db, { actorId: req.user.id, action: "server.create", targetType: "server", targetId: row!.id, data: body });
     await enqueueVmOp(queue, { serverId: row!.id, op: "create", actorId: req.user.id });

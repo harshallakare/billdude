@@ -3,11 +3,12 @@
  *
  * Usage: create-server form at /servers/new. Options come from GET /api/catalog
  * (live VHI flavors, images and networks). Submitting queues the build and
- * opens the new server's detail page, which shows progress.
+ * opens the new server's detail page, which shows progress. Selected SSH keys
+ * are injected with cloud-init.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button, Card, ErrorText, Field, Input, Select } from "../components/ui";
 import { api, type CreateServerInput } from "../lib/api";
 
@@ -21,7 +22,9 @@ export function CreateServerPage() {
     imageId: "",
     networkId: "",
     bootVolumeGb: 20,
+    sshKeyIds: [],
   });
+  const keys = useQuery({ queryKey: ["ssh-keys"], queryFn: api.listSshKeys });
 
   // Pre-select the first option of each list once the catalog loads.
   useEffect(() => {
@@ -106,6 +109,36 @@ export function CreateServerPage() {
                 </option>
               ))}
             </Select>
+          </Field>
+
+          <Field label="SSH keys" hint="Installed for the image's default user. Password login over SSH is disabled.">
+            <div className="space-y-2 rounded-md border border-slate-200 p-3">
+              {keys.data?.sshKeys.length === 0 && (
+                <p className="text-sm text-slate-500">
+                  No keys yet —{" "}
+                  <Link to="/ssh-keys" className="text-indigo-600 hover:underline">
+                    add one
+                  </Link>{" "}
+                  or you will only be able to use the web console.
+                </p>
+              )}
+              {keys.data?.sshKeys.map((k) => (
+                <label key={k.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.sshKeyIds.includes(k.id)}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        sshKeyIds: e.target.checked ? [...form.sshKeyIds, k.id] : form.sshKeyIds.filter((id) => id !== k.id),
+                      })
+                    }
+                  />
+                  <span className="font-medium">{k.name}</span>
+                  <span className="font-mono text-xs text-slate-500">{k.fingerprint}</span>
+                </label>
+              ))}
+            </div>
           </Field>
 
           <ErrorText error={create.error} />

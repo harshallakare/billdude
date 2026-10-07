@@ -6,6 +6,7 @@
  *   /servers                   list (default after sign-in)
  *   /servers/new               create wizard
  *   /servers/:id               detail + power actions + console
+ *   /ssh-keys                  SSH key manager
  */
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -16,6 +17,7 @@ import { LoginPage } from "./pages/Login";
 import { RegisterPage } from "./pages/Register";
 import { ServerDetailPage } from "./pages/ServerDetail";
 import { ServersPage } from "./pages/Servers";
+import { SshKeysPage } from "./pages/SshKeys";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useCurrentUser();
@@ -40,6 +42,7 @@ export function App() {
         <Route path="/servers" element={<ServersPage />} />
         <Route path="/servers/new" element={<CreateServerPage />} />
         <Route path="/servers/:id" element={<ServerDetailPage />} />
+        <Route path="/ssh-keys" element={<SshKeysPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/servers" replace />} />
     </Routes>

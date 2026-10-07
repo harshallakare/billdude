@@ -26,6 +26,7 @@ import { authRoutes } from "./routes/auth.js";
 import { catalogRoutes } from "./routes/catalog.js";
 import { healthRoutes } from "./routes/health.js";
 import { serverRoutes } from "./routes/servers.js";
+import { sshKeyRoutes } from "./routes/ssh-keys.js";
 
 export interface AppDeps {
   config: Config;
@@ -72,6 +73,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await authRoutes(api, deps);
       await catalogRoutes(api, deps);
       await serverRoutes(api, deps);
+      await sshKeyRoutes(api, deps);
       await adminRoutes(api, deps);
     },
     { prefix: "/api" },

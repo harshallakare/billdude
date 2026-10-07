@@ -66,6 +66,15 @@ export interface CreateServerInput {
   imageId: string;
   networkId: string;
   bootVolumeGb: number;
+  sshKeyIds: string[];
+}
+
+export interface SshKey {
+  id: string;
+  name: string;
+  publicKey: string;
+  fingerprint: string;
+  createdAt: string;
 }
 
 export class ApiError extends Error {
@@ -108,6 +117,10 @@ export const api = {
     request<{ server: Server }>("POST", `/servers/${id}/actions`, { action }),
   deleteServer: (id: string) => request<{ server: Server }>("DELETE", `/servers/${id}`),
   consoleUrl: (id: string) => request<{ url: string }>("GET", `/servers/${id}/console`),
+
+  listSshKeys: () => request<{ sshKeys: SshKey[] }>("GET", "/ssh-keys"),
+  addSshKey: (name: string, publicKey: string) => request<{ sshKey: SshKey }>("POST", "/ssh-keys", { name, publicKey }),
+  deleteSshKey: (id: string) => request<{ ok: true }>("DELETE", `/ssh-keys/${id}`),
 };
 
 /** Statuses during which the UI should keep polling. */

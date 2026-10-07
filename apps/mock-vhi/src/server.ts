@@ -16,6 +16,7 @@
  *   - start/stop/reboot/delete complete after `actionMs`; invalid state
  *     transitions return 409 like Nova does.
  *   - Requests without a valid X-Auth-Token get 401.
+ *   - GET /_mock/servers/:id returns internal state (incl. decoded user data) for tests.
  * State is computed lazily from timestamps, so no timers are left running.
  */
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,8 @@ interface MockServer {
   metadata: Record<string, string>;
   created: string;
   ip: string;
+  /** Decoded cloud-init user data, exposed through the /_mock inspection endpoint. */
+  userData?: string;
   fault?: string;
   /** Pending lazy transition: becomes `to` once Date.now() >= at ("GONE" removes the server). */
   pending?: { to: Status | "GONE"; at: number; fault?: string };
@@ -165,7 +168,7 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
   /* ---------------- Auth guard for every other API route ---------------- */
 
   app.addHook("onRequest", async (req, reply) => {
-    if (req.url.startsWith("/identity/") || req.url.startsWith("/console/")) return;
+    if (req.url.startsWith("/identity/") || req.url.startsWith("/console/") || req.url.startsWith("/_mock/")) return;
     const token = req.headers["x-auth-token"];
     const expiry = typeof token === "string" ? tokens.get(token) : undefined;
     if (!expiry || expiry < Date.now()) {
@@ -226,6 +229,7 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
       metadata: (body.metadata as Record<string, string> | undefined) ?? {},
       created: new Date().toISOString(),
       ip: `10.0.0.${nextIp++}`,
+      userData: typeof body.user_data === "string" ? Buffer.from(body.user_data, "base64").toString("utf8") : undefined,
       pending: failing
         ? { to: "ERROR", at: Date.now() + buildMs, fault: "No valid host was found. There are not enough hosts available." }
         : { to: "ACTIVE", at: Date.now() + buildMs },
@@ -283,6 +287,14 @@ export function buildMockVhi(options: MockVhiOptions = {}): FastifyInstance {
         url: `${baseUrl(req)}/console/vnc_auto.html?path=%3Ftoken%3D${token}`,
       },
     };
+  });
+
+  /* ---------------- Test inspection (not part of OpenStack) ---------------- */
+
+  app.get<{ Params: { id: string } }>("/_mock/servers/:id", async (req, reply) => {
+    const server = servers.get(req.params.id);
+    if (!server) return reply.code(404).send({ error: "not found" });
+    return { ...server, pending: undefined };
   });
 
   /* ---------------- Fake noVNC page ---------------- */

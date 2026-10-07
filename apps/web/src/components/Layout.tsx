@@ -25,6 +25,9 @@ export function Layout() {
             <NavLink to="/servers" className={navClass}>
               Servers
             </NavLink>
+            <NavLink to="/ssh-keys" className={navClass}>
+              SSH keys
+            </NavLink>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-slate-600">
